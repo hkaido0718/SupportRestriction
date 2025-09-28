@@ -1,6 +1,9 @@
 import networkx as nx
 from itertools import combinations
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy as np
 
 class GraphAnalyzer:
     def __init__(self, G, group_fn):
@@ -83,6 +86,50 @@ class GraphAnalyzer:
                 'satisfies_condition': not violated
             })
         return result
+
+    def plot_grouped_on_circle(self, title="Graph", node_size=1000, figsize=(6, 6), cmap_name="Set2", group_gap=np.pi/15):
+        """
+        Plot the graph on a circle with equal angular spacing between groups and color by group_fn.
+        """
+        groups = {}
+        for node in self.G.nodes:
+            key = self.group_fn(node)
+            groups.setdefault(key, []).append(node)
+
+        group_keys = list(groups.keys())
+        group_keys.sort()
+        K = len(group_keys)
+        J = max(len(groups[g]) for g in group_keys)
+        N = sum(len(groups[g]) for g in group_keys)
+
+        total_gap = K * group_gap
+        angle_available = 2 * np.pi - total_gap
+        angle_between_points = angle_available / N
+
+        angles = []
+        for g in range(K):
+            start = g * (J * angle_between_points + group_gap)
+            for j in range(len(groups[group_keys[g]])):
+                angles.append(start + j * angle_between_points)
+
+        # Calculate positions on the circle with a rotation offset
+        angle_offset = -1.15 * np.pi / 2
+        x = np.cos(np.array(angles) + angle_offset)
+        y = np.sin(np.array(angles) + angle_offset)
+        pos = {node: (x[i], y[i]) for i, node in enumerate([n for g in group_keys for n in groups[g]])}
+
+        # Assign colors
+        cmap = cm.get_cmap(cmap_name, K)
+        group_color = {group_keys[i]: cmap(i) for i in range(K)}
+        node_colors = [group_color[self.group_fn(node)] for node in self.G.nodes]
+
+        # Plot
+        plt.figure(figsize=figsize)
+        nx.draw(self.G, pos, with_labels=True, node_color=node_colors,
+                node_size=node_size, edge_color='gray')
+        plt.title(title)
+        plt.axis('off')
+        plt.show()
 
     @staticmethod
     def build_graph_pairwise(nodes, violate_pairwise_fn, group_fn):
