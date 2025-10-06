@@ -86,6 +86,57 @@ class GraphAnalyzer:
                 'satisfies_condition': not violated
             })
         return result
+    
+    def enumerate_cliques_and_check_incidence(self, A, nodes):
+        """
+        Enumerate all maximal cliques of the graph and check whether
+        each clique corresponds exactly to a column of the vertex–clique incidence matrix A.
+
+        Parameters
+        ----------
+        A : array-like or pandas.DataFrame
+            Vertex–clique incidence matrix (n_vertices × n_cliques).
+            A[i, j] = 1 if vertex i belongs to clique j.
+        nodes : list
+            Node labels corresponding to the rows of A.
+
+        Returns
+        -------
+        results : list of dict
+            Each element has:
+            - 'index': index of the clique (1-based)
+            - 'clique': sorted list of nodes
+            - 'satisfies_condition': True if the clique matches a column of A
+        """
+        # Convert A to numpy array if necessary
+        if isinstance(A, pd.DataFrame):
+            A_mat = A.values
+        else:
+            A_mat = np.asarray(A)
+
+        n_vertices, n_cliques = A_mat.shape
+        if len(nodes) != n_vertices:
+            raise ValueError("Length of 'nodes' must equal number of rows in A.")
+
+        # Build the set of cliques represented in A
+        incidence_cliques = [
+            frozenset(nodes[i] for i in range(n_vertices) if A_mat[i, j] == 1)
+            for j in range(n_cliques)
+        ]
+
+        # Enumerate maximal cliques from the graph
+        cliques = list(nx.find_cliques(self.G))
+        results = []
+        for idx, clique in enumerate(cliques):
+            clique_set = frozenset(clique)
+            in_incidence = any(clique_set == inc for inc in incidence_cliques)
+            results.append({
+                'index': idx + 1,
+                'clique': sorted(clique),
+                'satisfies_condition': in_incidence
+            })
+
+        return results
 
     def plot_grouped_on_circle(self, title="Graph", node_size=1000, figsize=(6, 6), cmap_name="Set2", group_gap=np.pi/15):
         """
@@ -150,4 +201,57 @@ class GraphAnalyzer:
                     continue
                 if not violate_pairwise_fn(u, v):
                     G.add_edge(u, v)
+        return G
+
+    @staticmethod
+    def build_graph_incidence(A, nodes, group_fn=None):
+        """
+        Construct an undirected graph from a vertex–clique incidence matrix.
+
+        Parameters
+        ----------
+        A : array-like or pandas.DataFrame
+            Binary incidence matrix of shape (n_vertices, n_cliques).
+            A[i, j] = 1 if vertex i belongs to clique j.
+        nodes : list
+            List of node labels corresponding to the rows of A.
+        group_fn : callable, optional
+            Function mapping each node to its group identifier (e.g. z value).
+            Used to verify that no edges connect nodes within the same group.
+
+        Returns
+        -------
+        G : networkx.Graph
+            Undirected graph where edges connect vertices that share at least one clique.
+
+        Raises
+        ------
+        ValueError
+            If any edge connects two nodes that share the same group (according to group_fn).
+        """
+        if isinstance(A, pd.DataFrame):
+            A_mat = A.values
+            if list(A.index) != list(nodes):
+                raise ValueError("Node order in 'nodes' must match A's row index order.")
+        else:
+            A_mat = np.asarray(A)
+            if len(nodes) != A_mat.shape[0]:
+                raise ValueError("Length of 'nodes' must equal number of rows in A.")
+
+        G = nx.Graph()
+        G.add_nodes_from(nodes)
+
+        n_vertices, n_cliques = A_mat.shape
+        for j in range(n_cliques):
+            members = [nodes[i] for i in range(n_vertices) if A_mat[i, j] == 1]
+            for u, v in combinations(members, 2):
+                G.add_edge(u, v)
+
+        if group_fn is not None:
+            for u, v in G.edges():
+                if group_fn(u) == group_fn(v):
+                    raise ValueError(
+                        f"Invalid graph: nodes {u} and {v} share the same group {group_fn(u)}."
+                    )
+
         return G
