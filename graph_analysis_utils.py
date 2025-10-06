@@ -86,6 +86,57 @@ class GraphAnalyzer:
                 'satisfies_condition': not violated
             })
         return result
+    
+    def enumerate_cliques_and_check_incidence(self, A, nodes):
+        """
+        Enumerate all maximal cliques of the graph and check whether
+        each clique corresponds exactly to a column of the vertex–clique incidence matrix A.
+
+        Parameters
+        ----------
+        A : array-like or pandas.DataFrame
+            Vertex–clique incidence matrix (n_vertices × n_cliques).
+            A[i, j] = 1 if vertex i belongs to clique j.
+        nodes : list
+            Node labels corresponding to the rows of A.
+
+        Returns
+        -------
+        results : list of dict
+            Each element has:
+            - 'index': index of the clique (1-based)
+            - 'clique': sorted list of nodes
+            - 'satisfies_condition': True if the clique matches a column of A
+        """
+        # Convert A to numpy array if necessary
+        if isinstance(A, pd.DataFrame):
+            A_mat = A.values
+        else:
+            A_mat = np.asarray(A)
+
+        n_vertices, n_cliques = A_mat.shape
+        if len(nodes) != n_vertices:
+            raise ValueError("Length of 'nodes' must equal number of rows in A.")
+
+        # Build the set of cliques represented in A
+        incidence_cliques = [
+            frozenset(nodes[i] for i in range(n_vertices) if A_mat[i, j] == 1)
+            for j in range(n_cliques)
+        ]
+
+        # Enumerate maximal cliques from the graph
+        cliques = list(nx.find_cliques(self.G))
+        results = []
+        for idx, clique in enumerate(cliques):
+            clique_set = frozenset(clique)
+            in_incidence = any(clique_set == inc for inc in incidence_cliques)
+            results.append({
+                'index': idx + 1,
+                'clique': sorted(clique),
+                'satisfies_condition': in_incidence
+            })
+
+        return results
 
     def plot_grouped_on_circle(self, title="Graph", node_size=1000, figsize=(6, 6), cmap_name="Set2", group_gap=np.pi/15):
         """
