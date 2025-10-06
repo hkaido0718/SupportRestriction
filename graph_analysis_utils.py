@@ -151,3 +151,56 @@ class GraphAnalyzer:
                 if not violate_pairwise_fn(u, v):
                     G.add_edge(u, v)
         return G
+
+    @staticmethod
+    def build_graph_incidence(A, nodes, group_fn=None):
+        """
+        Construct an undirected graph from a vertex–clique incidence matrix.
+
+        Parameters
+        ----------
+        A : array-like or pandas.DataFrame
+            Binary incidence matrix of shape (n_vertices, n_cliques).
+            A[i, j] = 1 if vertex i belongs to clique j.
+        nodes : list
+            List of node labels corresponding to the rows of A.
+        group_fn : callable, optional
+            Function mapping each node to its group identifier (e.g. z value).
+            Used to verify that no edges connect nodes within the same group.
+
+        Returns
+        -------
+        G : networkx.Graph
+            Undirected graph where edges connect vertices that share at least one clique.
+
+        Raises
+        ------
+        ValueError
+            If any edge connects two nodes that share the same group (according to group_fn).
+        """
+        if isinstance(A, pd.DataFrame):
+            A_mat = A.values
+            if list(A.index) != list(nodes):
+                raise ValueError("Node order in 'nodes' must match A's row index order.")
+        else:
+            A_mat = np.asarray(A)
+            if len(nodes) != A_mat.shape[0]:
+                raise ValueError("Length of 'nodes' must equal number of rows in A.")
+
+        G = nx.Graph()
+        G.add_nodes_from(nodes)
+
+        n_vertices, n_cliques = A_mat.shape
+        for j in range(n_cliques):
+            members = [nodes[i] for i in range(n_vertices) if A_mat[i, j] == 1]
+            for u, v in combinations(members, 2):
+                G.add_edge(u, v)
+
+        if group_fn is not None:
+            for u, v in G.edges():
+                if group_fn(u) == group_fn(v):
+                    raise ValueError(
+                        f"Invalid graph: nodes {u} and {v} share the same group {group_fn(u)}."
+                    )
+
+        return G
