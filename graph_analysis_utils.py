@@ -28,13 +28,30 @@ class GraphAnalyzer:
         for i, mis in enumerate(mis_list, 1):
             print(f"{i}: {mis}")
 
-    def save_vertex_mis_incidence(self, filename="vertex_mis_incidence.csv"):
+    def save_vertex_mis_incidence(
+        self, filename="vertex_mis_incidence.csv", node_order=None
+    ):
         mis_list = self.find_mis_excluding_single_group()
-        nodes = sorted(self.G.nodes(), key=lambda node: (self.group_fn(node), node))
-        incidence = []
-        for mis in mis_list:
-            row = [1 if node in mis else 0 for node in nodes]
-            incidence.append(row)
+
+        if node_order is None:
+            nodes = sorted(
+                self.G.nodes(),
+                key=lambda node: (self.group_fn(node), node)
+            )
+        else:
+            nodes = list(node_order)
+            if (
+                len(nodes) != len(set(nodes))
+                or set(nodes) != set(self.G.nodes())
+            ):
+                raise ValueError(
+                    "node_order must contain every graph node exactly once."
+                )
+
+        incidence = [
+            [int(node in mis) for node in nodes]
+            for mis in mis_list
+        ]
         df = pd.DataFrame(incidence, columns=nodes)
         df.to_csv(filename, index=False)
         return df
