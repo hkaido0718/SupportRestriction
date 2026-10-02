@@ -1,7 +1,8 @@
 """Tests for ``iv_model.IVModel``.
 
 The first four groups cover the binary supports, the edge table, larger supports, and
-input validation; the groups after them are additional checks. Every expected edge is either written out by
+input validation; the fifth covers the nonincreasing direction of D-monotonicity; the
+groups after them are additional checks. Every expected edge is either written out by
 hand, with the mathematical reason in the docstring or a comment, or derived by
 enumerating potential-response vectors (Method 2 of Kaido and Ponomarev, 2025). None is
 produced by the violation functions under test.
@@ -42,21 +43,39 @@ def as_edges(pairs):
     return {frozenset(pair) for pair in pairs}
 
 
-def method2_edges(y_support, d_support, z_support, exclusion, d_monotonicity):
+def method2_edges(
+    y_support,
+    d_support,
+    z_support,
+    exclusion,
+    d_monotonicity,
+    d_monotonicity_direction="nondecreasing",
+):
     """Edges from enumerating every potential-response vector (Method 2).
 
     A vector consists of D(z) for each z and Y(d, z) for each (d, z); under exclusion
     Y(d, z) is the same for all z. A vector generates the node (Y(D(z), z), D(z), z)
-    at every z, and every pair of nodes it generates is an edge. This construction
-    never calls the pairwise rules of ``IVModel``.
+    at every z, and every pair of nodes it generates is an edge. With Z sorted,
+    nondecreasing D-monotonicity drops dvec with dvec[i] > dvec[j] for i < j, and
+    nonincreasing D-monotonicity drops dvec with dvec[i] < dvec[j] for i < j. This
+    construction never calls the pairwise rules of ``IVModel``.
     """
     Z, D, Y = tuple(sorted(z_support)), tuple(sorted(d_support)), tuple(sorted(y_support))
     edges = set()
     for dvec in product(D, repeat=len(Z)):  # dvec[k] = D(Z[k]); Z is sorted
-        if d_monotonicity and any(
-            dvec[i] > dvec[j] for i in range(len(Z)) for j in range(i + 1, len(Z))
-        ):
-            continue
+        if d_monotonicity:
+            if d_monotonicity_direction == "nondecreasing":
+                violates_direction = any(
+                    dvec[i] > dvec[j] for i in range(len(Z)) for j in range(i + 1, len(Z))
+                )
+            elif d_monotonicity_direction == "nonincreasing":
+                violates_direction = any(
+                    dvec[i] < dvec[j] for i in range(len(Z)) for j in range(i + 1, len(Z))
+                )
+            else:
+                raise ValueError(f"unknown d_monotonicity_direction: {d_monotonicity_direction!r}")
+            if violates_direction:
+                continue
         if exclusion:
             outcome_maps = (
                 {(d, z): ymap[i] for i, d in enumerate(D) for z in Z}
@@ -112,6 +131,37 @@ BINARY_EDGES_BOTH = as_edges([
     ((0, 0, 0), (0, 1, 1)), ((0, 0, 0), (1, 1, 1)),   # complier types, Y(0), Y(1) free
     ((1, 0, 0), (0, 1, 1)), ((1, 0, 0), (1, 1, 1)),
 ])
+
+# D-monotonicity only, nonincreasing. The four pairs with treatment 0 at z = 0 and
+# treatment 1 at z = 1 are removed: D(0) = 0 < 1 = D(1) contradicts D(0) >= D(1).
+# Outcomes are unrestricted, so same-treatment pairs and defier pairs remain.
+BINARY_EDGES_MONOTONICITY_NONINCREASING = as_edges([
+    ((0, 0, 0), (0, 0, 1)), ((0, 0, 0), (1, 0, 1)),   # D(0) = 0, D(1) = 0
+    ((1, 0, 0), (0, 0, 1)), ((1, 0, 0), (1, 0, 1)),
+    ((0, 1, 0), (0, 0, 1)), ((0, 1, 0), (1, 0, 1)),   # D(0) = 1, D(1) = 0 (defier)
+    ((1, 1, 0), (0, 0, 1)), ((1, 1, 0), (1, 0, 1)),
+    ((0, 1, 0), (0, 1, 1)), ((0, 1, 0), (1, 1, 1)),   # D(0) = 1, D(1) = 1
+    ((1, 1, 0), (0, 1, 1)), ((1, 1, 0), (1, 1, 1)),
+])
+
+# Both, nonincreasing. Same-d pairs must also have the same outcome under exclusion;
+# treatment-falling defier pairs have different d, so their outcomes are unrestricted.
+BINARY_EDGES_BOTH_NONINCREASING = as_edges([
+    ((0, 0, 0), (0, 0, 1)), ((1, 0, 0), (1, 0, 1)),   # same D = 0, Y(0) fixed
+    ((0, 1, 0), (0, 1, 1)), ((1, 1, 0), (1, 1, 1)),   # same D = 1, Y(1) fixed
+    ((0, 1, 0), (0, 0, 1)), ((0, 1, 0), (1, 0, 1)),   # defier types, Y(1), Y(0) free
+    ((1, 1, 0), (0, 0, 1)), ((1, 1, 0), (1, 0, 1)),
+])
+
+BINARY_COMPLIER_PAIRS = as_edges([
+    ((0, 0, 0), (0, 1, 1)), ((0, 0, 0), (1, 1, 1)),   # D(0) = 0, D(1) = 1
+    ((1, 0, 0), (0, 1, 1)), ((1, 0, 0), (1, 1, 1)),
+])
+BINARY_DEFIER_PAIRS = as_edges([
+    ((0, 1, 0), (0, 0, 1)), ((0, 1, 0), (1, 0, 1)),   # D(0) = 1, D(1) = 0
+    ((1, 1, 0), (0, 0, 1)), ((1, 1, 0), (1, 0, 1)),
+])
+BINARY_DIRECTION_SYMMETRIC_DIFFERENCE = BINARY_COMPLIER_PAIRS | BINARY_DEFIER_PAIRS
 
 BINARY_EDGES = {
     "exclusion": BINARY_EDGES_EXCLUSION,
@@ -332,6 +382,284 @@ def test_both_flags_false_rejected():
     """A model with no restriction is not one of the three specifications."""
     with pytest.raises(ValueError):
         IVModel(**BINARY, exclusion=False, d_monotonicity=False)
+
+
+# --------------------------------------------------------------------------- nonincreasing direction
+
+
+@pytest.mark.parametrize("spec", list(SPECS))
+def test_default_direction_is_nondecreasing_and_binary_graphs_unchanged(spec):
+    """The default direction preserves the original binary edge sets for every spec."""
+    default_model = IVModel(**BINARY, **SPECS[spec])
+    explicit_model = IVModel(
+        **BINARY, **SPECS[spec], d_monotonicity_direction="nondecreasing"
+    )
+    assert default_model.d_monotonicity_direction == "nondecreasing"
+    assert explicit_model.d_monotonicity_direction == "nondecreasing"
+    assert edge_set(default_model.build_graph()) == BINARY_EDGES[spec]
+    assert edge_set(explicit_model.build_graph()) == BINARY_EDGES[spec]
+
+
+def test_nonincreasing_reverses_rising_and_falling_binary_pairs():
+    """With exclusion off, rising treatment is allowed only under nondecreasing and
+    falling treatment is allowed only under nonincreasing."""
+    rising = ((0, 0, 0), (0, 1, 1))   # D(0) = 0 < 1 = D(1)
+    falling = ((0, 1, 0), (0, 0, 1))  # D(0) = 1 > 0 = D(1)
+    nondecreasing = IVModel(
+        **BINARY, exclusion=False, d_monotonicity=True,
+        d_monotonicity_direction="nondecreasing",
+    )
+    nonincreasing = IVModel(
+        **BINARY, exclusion=False, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    )
+    G_nondecreasing = nondecreasing.build_graph()
+    G_nonincreasing = nonincreasing.build_graph()
+
+    assert G_nondecreasing.has_edge(*rising)
+    assert not G_nonincreasing.has_edge(*rising)
+    assert not G_nondecreasing.has_edge(*falling)
+    assert G_nonincreasing.has_edge(*falling)
+
+    for u, v in [rising]:
+        assert nondecreasing.violates_d_monotonicity(u, v) is False
+        assert nondecreasing.violates_d_monotonicity(v, u) is False
+        assert nonincreasing.violates_d_monotonicity(u, v) is True
+        assert nonincreasing.violates_d_monotonicity(v, u) is True
+    for u, v in [falling]:
+        assert nondecreasing.violates_d_monotonicity(u, v) is True
+        assert nondecreasing.violates_d_monotonicity(v, u) is True
+        assert nonincreasing.violates_d_monotonicity(u, v) is False
+        assert nonincreasing.violates_d_monotonicity(v, u) is False
+
+
+def test_equal_treatment_pairs_are_allowed_by_both_directions():
+    """Equal treatment values satisfy both D(0) <= D(1) and D(0) >= D(1). With
+    exclusion on, unequal outcomes at the same treatment still violate exclusion."""
+    unequal_outcome = ((0, 1, 0), (1, 1, 1))  # same D = 1, different Y
+    equal_outcome = ((0, 0, 0), (0, 0, 1))    # same D = 0, same Y
+    for direction in ["nondecreasing", "nonincreasing"]:
+        model = IVModel(
+            **BINARY, exclusion=True, d_monotonicity=True,
+            d_monotonicity_direction=direction,
+        )
+        for u, v in [unequal_outcome, equal_outcome]:
+            assert model.violates_d_monotonicity(u, v) is False
+            assert model.violates_d_monotonicity(v, u) is False
+        G = model.build_graph()
+        assert not G.has_edge(*unequal_outcome)
+        assert G.has_edge(*equal_outcome)
+
+
+def test_binary_nonincreasing_edge_sets_and_direction_symmetric_difference():
+    """For nonincreasing monotonicity, the four complier pairs are removed and the four
+    defier pairs are allowed; with exclusion also imposed, same-d unequal-y pairs are
+    removed separately."""
+    G_mono = IVModel(
+        **BINARY, exclusion=False, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    ).build_graph()
+    G_both = IVModel(
+        **BINARY, exclusion=True, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    ).build_graph()
+    mono_edges = edge_set(G_mono)
+    both_edges = edge_set(G_both)
+
+    assert len(BINARY_EDGES_MONOTONICITY_NONINCREASING) == 12
+    assert len(BINARY_EDGES_BOTH_NONINCREASING) == 8
+    assert G_mono.number_of_edges() == 12
+    assert G_both.number_of_edges() == 8
+    assert mono_edges == BINARY_EDGES_MONOTONICITY_NONINCREASING
+    assert both_edges == BINARY_EDGES_BOTH_NONINCREASING
+    assert mono_edges != BINARY_EDGES_MONOTONICITY
+    assert both_edges != BINARY_EDGES_BOTH
+    assert (mono_edges ^ BINARY_EDGES_MONOTONICITY) == BINARY_DIRECTION_SYMMETRIC_DIFFERENCE
+    assert (both_edges ^ BINARY_EDGES_BOTH) == BINARY_DIRECTION_SYMMETRIC_DIFFERENCE
+
+
+@pytest.mark.parametrize("exclusion", [True, False])
+def test_larger_supports_direction_examples(exclusion):
+    """On larger supports, treatment falling from 5 to 0 is allowed only under
+    nonincreasing; treatment rising from 0 to 5 is allowed only under nondecreasing."""
+    falling = ((1, 5, -1), (0, 0, 10))  # z rises from -1 to 10 while D falls 5 to 0
+    rising = ((1, 0, -1), (0, 5, 10))   # z rises from -1 to 10 while D rises 0 to 5
+    nondecreasing = IVModel(
+        **LARGER, exclusion=exclusion, d_monotonicity=True,
+        d_monotonicity_direction="nondecreasing",
+    ).build_graph()
+    nonincreasing = IVModel(
+        **LARGER, exclusion=exclusion, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    ).build_graph()
+
+    for u, v in [falling]:
+        assert nonincreasing.has_edge(u, v)
+        assert nonincreasing.has_edge(v, u)
+        assert not nondecreasing.has_edge(u, v)
+        assert not nondecreasing.has_edge(v, u)
+    for u, v in [rising]:
+        assert nondecreasing.has_edge(u, v)
+        assert nondecreasing.has_edge(v, u)
+        assert not nonincreasing.has_edge(u, v)
+        assert not nonincreasing.has_edge(v, u)
+
+
+@pytest.mark.parametrize("supports", [BINARY, THREE_Z, LARGER], ids=["binary", "three_z", "larger"])
+@pytest.mark.parametrize("exclusion", [True, False])
+def test_method1_agrees_with_method2_nonincreasing(supports, exclusion):
+    """Method 1 and Method 2 agree when the D-monotonicity inequality is reversed."""
+    kwargs = dict(
+        exclusion=exclusion,
+        d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    )
+    G = IVModel(**supports, **kwargs).build_graph()
+    assert edge_set(G) == method2_edges(**supports, **kwargs)
+
+
+INVALID_D_MONOTONICITY_DIRECTIONS = [
+    "increasing",
+    "decreasing",
+    "NONDECREASING",
+    "non-decreasing",
+    "",
+    None,
+    1,
+    True,
+    ["nondecreasing"],
+]
+
+
+@pytest.mark.parametrize("d_monotonicity", [True, False])
+@pytest.mark.parametrize("bad_direction", INVALID_D_MONOTONICITY_DIRECTIONS)
+def test_invalid_d_monotonicity_direction_rejected(d_monotonicity, bad_direction):
+    expected_exception = ValueError if isinstance(bad_direction, str) else TypeError
+    with pytest.raises(expected_exception) as info:
+        IVModel(
+            **BINARY,
+            exclusion=True,
+            d_monotonicity=d_monotonicity,
+            d_monotonicity_direction=bad_direction,
+        )
+    message = str(info.value)
+    assert "d_monotonicity_direction" in message
+    assert "nondecreasing" in message
+    assert "nonincreasing" in message
+
+
+@pytest.mark.parametrize("supports", [BINARY, THREE_Z, LARGER], ids=["binary", "three_z", "larger"])
+def test_direction_has_no_effect_for_exclusion_only_models(supports):
+    nondecreasing = IVModel(
+        **supports, exclusion=True, d_monotonicity=False,
+        d_monotonicity_direction="nondecreasing",
+    )
+    nonincreasing = IVModel(
+        **supports, exclusion=True, d_monotonicity=False,
+        d_monotonicity_direction="nonincreasing",
+    )
+    assert nondecreasing.d_monotonicity_direction == "nondecreasing"
+    assert nonincreasing.d_monotonicity_direction == "nonincreasing"
+    assert edge_set(nondecreasing.build_graph()) == edge_set(nonincreasing.build_graph())
+
+
+def test_repr_round_trips_nonincreasing_direction():
+    model = IVModel(
+        **LARGER, exclusion=True, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    )
+    rebuilt = eval(repr(model), {"IVModel": IVModel})
+    assert rebuilt.nodes == model.nodes
+    assert rebuilt.d_monotonicity_direction == "nonincreasing"
+    assert edge_set(rebuilt.build_graph()) == edge_set(model.build_graph())
+
+
+def _monotonicity_bullet(summary_text):
+    """The D-monotonicity line of a summary, which must be an indented bullet like the
+    other assumption lines; returned without the indentation and bullet."""
+    line = next(line for line in summary_text.splitlines() if "D-monotonicity:" in line)
+    assert line.startswith("    - "), line
+    return line[len("    - "):]
+
+
+def test_summary_reports_d_monotonicity_direction():
+    nondecreasing = IVModel(
+        **BINARY, exclusion=True, d_monotonicity=True,
+        d_monotonicity_direction="nondecreasing",
+    ).summary()
+    nonincreasing = IVModel(
+        **BINARY, exclusion=True, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    ).summary()
+    not_imposed_default = IVModel(
+        **BINARY, exclusion=True, d_monotonicity=False,
+        d_monotonicity_direction="nondecreasing",
+    ).summary()
+    not_imposed_nonincreasing = IVModel(
+        **BINARY, exclusion=True, d_monotonicity=False,
+        d_monotonicity_direction="nonincreasing",
+    ).summary()
+
+    nondecreasing_line = _monotonicity_bullet(nondecreasing)
+    nonincreasing_line = _monotonicity_bullet(nonincreasing)
+    assert nondecreasing_line == (
+        "D-monotonicity: imposed, nondecreasing. D(z) <= D(z') whenever z < z' "
+        "(treatment is nondecreasing in the instrument)."
+    )
+    assert nonincreasing_line == (
+        "D-monotonicity: imposed, nonincreasing. D(z) >= D(z') whenever z < z' "
+        "(treatment is nonincreasing in the instrument)."
+    )
+    assert "d_monotonicity_direction='nondecreasing' has no effect" in not_imposed_default
+    assert "d_monotonicity_direction='nonincreasing' has no effect" in not_imposed_nonincreasing
+
+
+def test_d_monotonicity_direction_is_fixed_after_construction():
+    model = IVModel(
+        **BINARY, exclusion=True, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    )
+    with pytest.raises(AttributeError):
+        model.d_monotonicity_direction = "nondecreasing"
+
+
+def test_positional_sixth_argument_sets_direction():
+    model = IVModel((0, 1), (0, 1), (0, 1), False, True, "nonincreasing")
+    assert model.exclusion is False
+    assert model.d_monotonicity is True
+    assert model.d_monotonicity_direction == "nonincreasing"
+    assert edge_set(model.build_graph()) == BINARY_EDGES_MONOTONICITY_NONINCREASING
+
+
+@pytest.mark.parametrize("direction", ["nondecreasing", "nonincreasing"])
+@pytest.mark.parametrize("spec", list(SPECS))
+def test_predicates_return_bool_for_both_directions(spec, direction):
+    model = IVModel(**BINARY, **SPECS[spec], d_monotonicity_direction=direction)
+    for u, v in combinations(model.nodes, 2):
+        for fn in (model.violates_exclusion, model.violates_d_monotonicity, model.violate_pairwise_fn):
+            result = fn(u, v)
+            assert isinstance(result, bool), (direction, fn.__name__, u, v, result)
+
+
+@pytest.mark.parametrize("supports", [BINARY, THREE_Z, LARGER], ids=["binary", "three_z", "larger"])
+@pytest.mark.parametrize("exclusion", [True, False])
+def test_reflecting_instrument_support_swaps_directions(supports, exclusion):
+    """A nonincreasing graph on Z becomes the nondecreasing graph on -Z after relabeling
+    each node (y, d, z) to (y, d, -z)."""
+    reflected_supports = dict(supports, z_support=tuple(-z for z in supports["z_support"]))
+    nonincreasing = IVModel(
+        **supports, exclusion=exclusion, d_monotonicity=True,
+        d_monotonicity_direction="nonincreasing",
+    ).build_graph()
+    nondecreasing_reflected = IVModel(
+        **reflected_supports, exclusion=exclusion, d_monotonicity=True,
+        d_monotonicity_direction="nondecreasing",
+    ).build_graph()
+    relabeled = nx.relabel_nodes(
+        nonincreasing, lambda node: (node[0], node[1], -node[2]), copy=True
+    )
+    assert set(relabeled.nodes) == set(nondecreasing_reflected.nodes)
+    assert edge_set(relabeled) == edge_set(nondecreasing_reflected)
 
 
 # --------------------------------------------------------------------------- additional

@@ -17,8 +17,10 @@ Optional support restrictions, selected by the two assumption flags:
 
 * ``exclusion``       Y(d, z) = Y(d, z') for every treatment value d and every pair of
                       instrument values z, z'.
-* ``d_monotonicity``  D(z) <= D(z') whenever z < z': treatment is nondecreasing in the
-                      instrument. No outcome monotonicity is imposed.
+* ``d_monotonicity``  D(z) <= D(z') whenever z < z' by default: treatment is
+                      nondecreasing in the instrument. With
+                      ``d_monotonicity_direction="nonincreasing"``, impose
+                      D(z) >= D(z') whenever z < z'. No outcome monotonicity is imposed.
 
 At least one flag must be True. When exclusion is off, nothing is assumed about how
 Y(d, z) varies with z, so the shorthand Y(d) is never used in that case.
@@ -33,18 +35,20 @@ and Ponomarev (2025, Section 5.1) decides each edge from the pair alone:
 
 * exclusion forbids the pair when the treatments agree but the outcomes differ,
   since the two events would fix Y(d) to two different values;
-* D-monotonicity forbids the pair when the treatment falls as the instrument rises.
+* D-monotonicity forbids the pair when treatment moves opposite the imposed direction
+  as the instrument rises.
 
 A pair rejected by neither enabled rule is compatible. The two rules constrain
-different components of the vector: the two treatment values extend to a
-nondecreasing D(.) over the whole instrument support (carry each value forward to the
-next observed instrument value, and use the smaller one below), and the outcome
-values are assigned per treatment value under exclusion, or per (d, z) cell without
-it, with every other component free. This is why ``violate_pairwise_fn`` combines the
-enabled rules with ``or``. The same construction extends any pairwise compatible set
-of nodes with distinct instrument values to a full vector, so the model satisfies the
-pairwise incompatibility criterion (Condition 2 of the paper) and every maximal clique
-of the graph is a support point.
+different components of the vector: under the nondecreasing direction, the two
+treatment values extend to a nondecreasing D(.) over the whole instrument support
+(carry each value forward to the next observed instrument value, and use the smaller
+one below), and under the nonincreasing direction the same extension argument holds
+verbatim with the inequality reversed. The outcome values are assigned per treatment
+value under exclusion, or per (d, z) cell without it, with every other component free.
+This is why ``violate_pairwise_fn`` combines the enabled rules with ``or``. The same
+construction extends any pairwise compatible set of nodes with distinct instrument
+values to a full vector, so the model satisfies the pairwise incompatibility criterion
+(Condition 2 of the paper) and every maximal clique of the graph is a support point.
 
 ``build_graph`` returns a ``networkx.Graph``. Maximal independent sets, plots, and the
 regularity checks are the job of ``GraphAnalyzer`` in ``graph_analysis_utils.py``,
@@ -72,7 +76,13 @@ class IVModel:
     exclusion : bool, default True
         Impose Y(d, z) = Y(d, z') for all d and all z, z'.
     d_monotonicity : bool, default False
-        Impose D(z) <= D(z') whenever z < z'.
+        Impose monotonicity of D(z) in the direction selected by
+        ``d_monotonicity_direction``.
+    d_monotonicity_direction : {"nondecreasing", "nonincreasing"}, default "nondecreasing"
+        Direction of D-monotonicity. ``"nondecreasing"`` imposes D(z) <= D(z') whenever
+        z < z'; ``"nonincreasing"`` imposes D(z) >= D(z') whenever z < z'. The value is
+        validated and stored even when ``d_monotonicity=False``; in that case it has no
+        effect on graph construction.
 
     At least one flag must be True. To request D-monotonicity alone, pass
     ``exclusion=False`` explicitly. Settings are fixed after construction: create a new
@@ -84,19 +94,43 @@ class IVModel:
         Validated, sorted supports.
     exclusion, d_monotonicity : bool
         The selected assumptions.
+    d_monotonicity_direction : str
+        The selected D-monotonicity direction, either ``"nondecreasing"`` or
+        ``"nonincreasing"``.
     nodes : tuple of (y, d, z)
         All observable events, with y outermost, then d, then z.
     """
 
     _frozen = False
+    _D_MONOTONICITY_DIRECTIONS = ("nondecreasing", "nonincreasing")
 
-    def __init__(self, y_support, d_support, z_support, exclusion=True, d_monotonicity=False):
+    def __init__(
+        self,
+        y_support,
+        d_support,
+        z_support,
+        exclusion=True,
+        d_monotonicity=False,
+        d_monotonicity_direction="nondecreasing",
+    ):
         for name, flag in (("exclusion", exclusion), ("d_monotonicity", d_monotonicity)):
             if not isinstance(flag, bool):
                 raise TypeError(
                     f"{name} must be a bool (True or False), got {flag!r} of type "
                     f"{type(flag).__name__}"
                 )
+        allowed = ", ".join(repr(value) for value in self._D_MONOTONICITY_DIRECTIONS)
+        if not isinstance(d_monotonicity_direction, str):
+            raise TypeError(
+                f"d_monotonicity_direction must be a str, one of {allowed}; got "
+                f"{d_monotonicity_direction!r} of type "
+                f"{type(d_monotonicity_direction).__name__}"
+            )
+        if d_monotonicity_direction not in self._D_MONOTONICITY_DIRECTIONS:
+            raise ValueError(
+                f"d_monotonicity_direction must be one of {allowed}; got "
+                f"{d_monotonicity_direction!r}"
+            )
         if not (exclusion or d_monotonicity):
             raise ValueError(
                 "at least one of exclusion and d_monotonicity must be True; to impose "
@@ -107,6 +141,7 @@ class IVModel:
         self.z_support = self._validate_support(z_support, "z_support")
         self.exclusion = exclusion
         self.d_monotonicity = d_monotonicity
+        self.d_monotonicity_direction = d_monotonicity_direction
         self.nodes = self._make_nodes()
         self._frozen = True
 
@@ -130,7 +165,8 @@ class IVModel:
         return (
             f"IVModel(y_support={self.y_support!r}, d_support={self.d_support!r}, "
             f"z_support={self.z_support!r}, exclusion={self.exclusion!r}, "
-            f"d_monotonicity={self.d_monotonicity!r})"
+            f"d_monotonicity={self.d_monotonicity!r}, "
+            f"d_monotonicity_direction={self.d_monotonicity_direction!r})"
         )
 
     # ------------------------------------------------------------------ validation
@@ -197,14 +233,17 @@ class IVModel:
         return d == dp and y != yp
 
     def violates_d_monotonicity(self, u, v):
-        """True if u and v cannot both occur under D(z) <= D(z') for z < z'.
+        """True if u and v cannot both occur under the stored D-monotonicity direction.
 
-        That is, the treatment is larger at the smaller instrument value. Evaluated
-        regardless of the ``d_monotonicity`` flag.
+        Under ``"nondecreasing"``, treatment cannot fall as z rises. Under
+        ``"nonincreasing"``, treatment cannot rise as z rises. Evaluated regardless of
+        the ``d_monotonicity`` flag.
         """
         y, d, z = u
         yp, dp, zp = v
-        return (z < zp and d > dp) or (zp < z and dp > d)
+        if self.d_monotonicity_direction == "nondecreasing":
+            return bool((z < zp and d > dp) or (zp < z and dp > d))
+        return bool((z < zp and d < dp) or (zp < z and dp < d))
 
     def violate_pairwise_fn(self, u, v):
         """True if an enabled assumption rules out observing both u and v.
@@ -256,14 +295,21 @@ class IVModel:
                 "value d."
             )
         if self.d_monotonicity:
-            monotonicity_line = (
-                "D-monotonicity: imposed. D(z) <= D(z') whenever z < z' (treatment is "
-                "nondecreasing in the instrument)."
-            )
+            if self.d_monotonicity_direction == "nondecreasing":
+                monotonicity_line = (
+                    "D-monotonicity: imposed, nondecreasing. D(z) <= D(z') whenever "
+                    "z < z' (treatment is nondecreasing in the instrument)."
+                )
+            else:
+                monotonicity_line = (
+                    "D-monotonicity: imposed, nonincreasing. D(z) >= D(z') whenever "
+                    "z < z' (treatment is nonincreasing in the instrument)."
+                )
         else:
             monotonicity_line = (
                 "D-monotonicity: not imposed. The potential treatments D(z) are "
-                "unrestricted across z."
+                f"unrestricted across z (d_monotonicity_direction="
+                f"{self.d_monotonicity_direction!r} has no effect)."
             )
         lines = [
             "IVModel: discrete instrumental-variable model (Kaido and Ponomarev, 2025)",
