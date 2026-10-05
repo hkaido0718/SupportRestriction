@@ -2,7 +2,6 @@ import networkx as nx
 from itertools import combinations
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 import numpy as np
 
 class GraphAnalyzer:
@@ -187,7 +186,7 @@ class GraphAnalyzer:
         pos = {node: (x[i], y[i]) for i, node in enumerate([n for g in group_keys for n in groups[g]])}
 
         # Assign colors
-        cmap = cm.get_cmap(cmap_name, K)
+        cmap = plt.get_cmap(cmap_name, K)
         group_color = {group_keys[i]: cmap(i) for i in range(K)}
         node_colors = [group_color[self.group_fn(node)] for node in self.G.nodes]
 
