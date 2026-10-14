@@ -7,7 +7,8 @@ Kaido and Ponomarev (2025).
 
 | File | Content |
 |---|---|
-| `iv_model.py` | The `IVModel` class (networkx is its only dependency) |
+| `iv_model.py` | The `IVModel` class (networkx and `support_validation` are its only dependencies) |
+| `support_validation.py` | `validate_support(values, name)`, the support validator shared with `PartialMonotonicityModel` (see `partial_monotonicity_handover.md`) |
 | `tests/test_iv_model.py` | pytest suite: binary supports, edge table, larger supports, input validation, the nonincreasing direction, then additional checks |
 | `tests/conftest.py` | Puts the repository root on `sys.path`, so the tests can `import iv_model` from any working directory, as the notebook does |
 | `IVModel_Exclusion_Monotonicity.ipynb` | The three specifications through `build_graph()` and the existing `GraphAnalyzer` (plot, MISs, regularity), the nonincreasing direction of D-monotonicity, and a three-valued instrument |
@@ -43,7 +44,8 @@ analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
   or `"nonincreasing"`), `nodes` (all `(y, d, z)`, y outermost, then d, then z).
   Settings are fixed after construction: assigning or deleting an attribute raises
   `AttributeError`; build a new `IVModel` to change anything.
-- Methods: `_validate_support(values, name)`, `_make_nodes()`, `group_fn(node)`,
+- Methods: `_validate_support(values, name)` (delegates to the shared
+  `support_validation.validate_support`), `_make_nodes()`, `group_fn(node)`,
   `violates_exclusion(u, v)`, `violates_d_monotonicity(u, v)`,
   `violate_pairwise_fn(u, v)`, `build_graph()`, `summary()`, and `__repr__`.
 - Direction of D-monotonicity. `d_monotonicity_direction` is the last constructor

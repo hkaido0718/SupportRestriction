@@ -55,11 +55,11 @@ regularity checks are the job of ``GraphAnalyzer`` in ``graph_analysis_utils.py`
 which this module deliberately does not import.
 """
 
-import math
-import numbers
 from itertools import combinations
 
 import networkx as nx
+
+from support_validation import validate_support
 
 __all__ = ["IVModel"]
 
@@ -174,38 +174,12 @@ class IVModel:
     def _validate_support(values, name):
         """Return ``values`` as a sorted tuple of distinct finite real numbers.
 
-        Raises TypeError for a string or a non-iterable, and for an element that is not
-        a real number (booleans count as not real here, so ``(0, True)`` is rejected
-        rather than treated as a duplicate of ``(0, 1)``). Raises ValueError for an
-        empty support, a duplicate value, or a value that is nan or infinite. NumPy
-        scalars are converted to plain Python numbers; int and float are kept as given.
+        Delegates to ``support_validation.validate_support``, which is shared with
+        ``PartialMonotonicityModel``: TypeError for a string, a non-iterable, or a
+        non-real element (booleans included); ValueError for an empty support, a
+        duplicate value, nan or inf. NumPy scalars become plain Python numbers.
         """
-        if isinstance(values, (str, bytes, bytearray)):
-            raise TypeError(f"{name} must be a sequence of numbers, not a string: {values!r}")
-        try:
-            items = list(values)
-        except TypeError:
-            raise TypeError(
-                f"{name} must be an iterable of numbers, got {values!r} of type "
-                f"{type(values).__name__}"
-            ) from None
-        if not items:
-            raise ValueError(f"{name} must not be empty")
-        cleaned = []
-        for value in items:
-            if isinstance(value, bool) or not isinstance(value, numbers.Real):
-                raise TypeError(
-                    f"{name} values must be real numbers, got {value!r} of type "
-                    f"{type(value).__name__}"
-                )
-            if not math.isfinite(value):
-                raise ValueError(f"{name} values must be finite, got {value!r}")
-            if type(value).__module__ == "numpy":  # numpy scalar -> plain int or float
-                value = value.item()
-            cleaned.append(value)
-        if len(set(cleaned)) != len(cleaned):
-            raise ValueError(f"{name} must not contain duplicate values: {tuple(items)!r}")
-        return tuple(sorted(cleaned))
+        return validate_support(values, name)
 
     # ------------------------------------------------------------------ nodes and groups
     def _make_nodes(self):
