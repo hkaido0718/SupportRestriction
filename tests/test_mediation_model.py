@@ -3,7 +3,7 @@
 Groups: (1) one binary mediator; (2) two binary mediators, all versus selected;
 (3) nonbinary supports and three-valued treatment; (4) three binary mediators;
 (5) invariance to support order and coordinate relabelling; (6) validation and
-the remaining interface checks.
+the remaining interface checks; (7) inequalities.
 
 Expected edges are hand-derived with reasons or obtained by enumerating every
 potential-response vector (Method 2). The enumeration never calls model methods.
@@ -629,3 +629,236 @@ def test_project_mediators_rejects_wrong_length(m):
     model = MediationModel(**THREE_BINARY, active_mediators=(0, 2))
     with pytest.raises(ValueError, match="coordinate"):
         model._project_mediators(m)
+
+
+# --------------------------------------------------------------------------- (7) inequalities
+
+@pytest.mark.parametrize("supports, active, independent_set, expected", [
+    (
+        ONE_BINARY, "all", [(0, (1,), 1), (1, (1,), 0)],
+        "P(Y=1, M1=1 | D=0) + P(Y=0, M1=1 | D=1) <= 1",
+    ),
+    (
+        ONE_BINARY, "all", [(0, (0,), 0), (1, (0,), 1)],
+        "P(Y=0, M1=0 | D=0) + P(Y=1, M1=0 | D=1) <= 1",
+    ),
+    (
+        TWO_BINARY, "all", [(0, (0, 1), 1), (1, (0, 1), 0)],
+        "P(Y=1, M1=0, M2=1 | D=0) + P(Y=0, M1=0, M2=1 | D=1) <= 1",
+    ),
+    (
+        TWO_BINARY, (0,),
+        [(0, (0, 0), 1), (0, (0, 1), 1), (1, (0, 0), 0), (1, (0, 1), 0)],
+        "P(Y=1, M1=0 | D=0) + P(Y=0, M1=0 | D=1) <= 1",
+    ),
+    (
+        TWO_BINARY, (0,), [(0, (0, 0), 0), (1, (0, 0), 1)],
+        "P(Y=0, M1=0, M2=0 | D=0) + P(Y=1, M1=0, M2=0 | D=1) <= 1",
+    ),
+    (
+        TWO_BINARY, (0,), [(0, (0, 0), 0), (0, (0, 1), 0), (1, (0, 0), 1)],
+        "P(Y=0, M1=0 | D=0) + P(Y=1, M1=0, M2=0 | D=1) <= 1",
+    ),
+    (
+        THREE_BINARY, (0, 2),
+        [(0, (0, 0, 1), 0), (0, (0, 1, 1), 0), (1, (0, 0, 1), 0), (1, (0, 1, 1), 0)],
+        "P(M1=0, M3=1 | D=0) <= 1",
+    ),
+    (ONE_BINARY, "all", [(0, (0,), 0), (1, (0,), 0)], "P(M1=0 | D=0) <= 1"),
+    (ONE_BINARY, "all", [(0, (0,), 0)], "P(Y=0, M1=0 | D=0) <= 1"),
+    (
+        TWO_BINARY, (0,), [(0, (0, 0), 0), (1, (0, 0), 0)],
+        "P(Y=0, M1=0, M2=0 | D=0) + P(Y=1, M1=0, M2=0 | D=0) <= 1",
+    ),
+])
+def test_format_inequality_hand_checked(supports, active, independent_set, expected):
+    """Unselected mediators merge only with full coverage; outcome merging also needs it."""
+    model = MediationModel(**supports, active_mediators=active)
+    checked = model._check_independent_set(independent_set)
+    assert type(checked) is list and checked == independent_set
+    text = model.format_inequality(independent_set)
+    assert type(text) is str and text == expected
+    assert text.endswith(" <= 1")
+
+
+@pytest.mark.parametrize("supports, m, expected", [
+    (ONE_BINARY, (1,), "M1=1"),
+    (TWO_BINARY, (0, 1), "M1=0, M2=1"),
+    (THREE_BINARY, (0, 1, 0), "M1=0, M2=1, M3=0"),
+    (NONBINARY, (1, 30), "M1=1, M2=30"),
+])
+def test_label_mediators(supports, m, expected):
+    assert MediationModel(**supports)._label_mediators(m) == expected
+
+
+@pytest.mark.parametrize("supports, active, profile, expected", [
+    (ONE_BINARY, "all", (1,), "M1=1"),
+    (TWO_BINARY, "all", (0, 1), "M1=0, M2=1"),
+    (TWO_BINARY, (0,), (1,), "M1=1"),
+    (TWO_BINARY, (1,), (0,), "M2=0"),
+    (THREE_BINARY, (0, 2), (0, 1), "M1=0, M3=1"),
+])
+def test_label_selected(supports, active, profile, expected):
+    """Selected profiles keep the original coordinate names, including skipped indices."""
+    model = MediationModel(**supports, active_mediators=active)
+    assert model._label_selected(profile) == expected
+
+
+@pytest.mark.parametrize("make_set", [list, tuple, set, frozenset, iter])
+def test_inequality_input_containers_and_term_order(make_set):
+    """Within a treatment, terms follow selected profile, outcome, then mediator vector."""
+    model = MediationModel((2, 1, 0), ((1, 0), (2, 1, 0)), (1, 0), (0,))
+    nodes = [(1, (1, 0), 0), (1, (0, 0), 0), (0, (0, 1), 0), (0, (0, 0), 0)]
+    checked = model._check_independent_set(make_set(nodes))
+    assert type(checked) is list and set(checked) == set(nodes)
+    if make_set in (list, tuple, iter):
+        assert checked == nodes
+    assert model.format_inequality(make_set(nodes)) == (
+        "P(Y=0, M1=0, M2=0 | D=0) + P(Y=0, M1=0, M2=1 | D=0) + "
+        "P(Y=1, M1=0, M2=0 | D=0) + P(Y=1, M1=1, M2=0 | D=0) <= 1"
+    )
+
+
+@pytest.mark.parametrize("outcomes, expected", [
+    ((0, 1), "P(Y=0, M1=0 | D=0) + P(Y=1, M1=0 | D=0) <= 1"),
+    ((0, 1, 2), "P(M1=0 | D=0) <= 1"),
+])
+def test_format_inequality_three_outcomes_merge_only_when_complete(outcomes, expected):
+    """Full M2 coverage sums out M2; summing out Y additionally needs all three outcomes."""
+    model = MediationModel((0, 1, 2), ((0, 1), (0, 1)), (0, 1), (0,))
+    independent_set = [(y, (0, m2), 0) for y, m2 in product(outcomes, (0, 1))]
+    assert model.format_inequality(independent_set) == expected
+
+
+@pytest.mark.parametrize("method", [
+    "_check_independent_set", "format_inequality", "format_inequalities",
+])
+@pytest.mark.parametrize("bad, exc, match", [
+    ("abc", TypeError, "string"),
+    (b"abc", TypeError, "string"),
+    (bytearray(b"abc"), TypeError, "string"),
+    (3, TypeError, "iterable"),
+    ([[0, (0,), 0]], TypeError, "hashable"),
+    ([(0, [0], 0)], TypeError, "hashable"),
+    ([], ValueError, "at least one node"),
+    ([(2, (0,), 0)], ValueError, "not a node"),
+    ([(0, (0,), 0), (0, (0,), 0)], ValueError, "duplicate"),
+    ([(0, (0,), 0), (0, (1,), 1)], ValueError, "adjacent"),
+])
+def test_inequality_validation(method, bad, exc, match):
+    """The validator and both formatters reject invalid sets, including adjacent events."""
+    model = MediationModel(**ONE_BINARY)
+    argument = [bad] if method == "format_inequalities" else bad
+    with pytest.raises(exc, match=match):
+        getattr(model, method)(argument)
+
+
+@pytest.mark.parametrize("make_sets", [list, tuple, iter])
+def test_format_inequalities_preserves_input_order(make_sets):
+    model = MediationModel(**ONE_BINARY)
+    independent_sets = [
+        [(0, (1,), 1), (1, (1,), 0)],
+        [(0, (0,), 0), (1, (0,), 1)],
+        [(0, (1,), 1), (1, (1,), 0)],
+    ]
+    texts = model.format_inequalities(make_sets(independent_sets))
+    assert type(texts) is list
+    assert all(type(text) is str and text.endswith(" <= 1") for text in texts)
+    assert texts == [
+        "P(Y=1, M1=1 | D=0) + P(Y=0, M1=1 | D=1) <= 1",
+        "P(Y=0, M1=0 | D=0) + P(Y=1, M1=0 | D=1) <= 1",
+        "P(Y=1, M1=1 | D=0) + P(Y=0, M1=1 | D=1) <= 1",
+    ]
+
+
+def test_format_inequalities_empty():
+    texts = MediationModel(**ONE_BINARY).format_inequalities([])
+    assert type(texts) is list and texts == []
+
+
+@pytest.mark.parametrize("bad", ["abc", b"abc", bytearray(b"abc"), 3])
+def test_format_inequalities_rejects_invalid_outer_input(bad):
+    with pytest.raises(TypeError):
+        MediationModel(**ONE_BINARY).format_inequalities(bad)
+
+
+def test_format_inequalities_rejects_a_single_independent_set():
+    with pytest.raises(TypeError, match="format_inequality"):
+        MediationModel(**ONE_BINARY).format_inequalities([(0, (1,), 1), (1, (1,), 0)])
+
+
+@pytest.mark.parametrize("supports, active, count, merges", [
+    (ONE_BINARY, "all", 4, 0),
+    (TWO_BINARY, "all", 8, 0),
+    (TWO_BINARY, (0,), 4, 2),
+])
+def test_format_inequalities_all_binary_multigroup_mis(supports, active, count, merges):
+    """All-selected MISs have two nodes; selecting M1 alone merges two pairs over M2."""
+    model = MediationModel(**supports, active_mediators=active)
+    G = model.build_graph()
+    mis_list = [
+        sorted(c) for c in nx.find_cliques(nx.complement(G))
+        if len({model.group_fn(n) for n in c}) > 1
+    ]
+    texts = model.format_inequalities(mis_list)
+    assert type(texts) is list and len(texts) == len(mis_list) == count
+    for independent_set, text in zip(mis_list, texts):
+        assert type(text) is str and text.endswith(" <= 1")
+        assert text.count("P(") == len(independent_set) - merges == 2
+        if active == (0,):
+            assert "M2=" not in text
+            assert all(
+                (y, (m[0], 1 - m[1]), d) in independent_set
+                for y, m, d in independent_set
+            )
+
+
+def test_one_mediator_inequalities_match_ivmodel():
+    """The exclusion-only IV graph and inequalities agree after renaming M1 and D."""
+    model = MediationModel(**ONE_BINARY)
+    scalar = IVModel((0, 1), (0, 1), (0, 1), exclusion=True)
+    G = model.build_graph()
+    relabel = lambda node: (node[0], node[1][0], node[2])
+    relabelled = nx.relabel_nodes(G, relabel)
+    scalar_graph = scalar.build_graph()
+    assert set(relabelled.nodes()) == set(scalar_graph.nodes())
+    assert edge_set(relabelled) == edge_set(scalar_graph)
+    mis_list = [
+        sorted(c) for c in nx.find_cliques(nx.complement(G))
+        if len({model.group_fn(n) for n in c}) > 1
+    ]
+    assert len(mis_list) == 4
+    for independent_set in mis_list:
+        iv_text = scalar.format_inequality([relabel(node) for node in independent_set])
+        assert model.format_inequality(independent_set) == (
+            iv_text.replace("D=", "MEDIATOR=").replace("Z=", "D=").replace("MEDIATOR=", "M1=")
+        )
+
+
+def test_inequality_nodes_are_matched_by_value_and_written_with_support_values():
+    """Aliases of a support value (float, NumPy scalar, bool) select the model's node."""
+    model = MediationModel(**ONE_BINARY)
+    aliased = [(np.int64(0), (True,), 0.0), (1, (1,), 1)]
+    checked = model._check_independent_set(aliased)
+    assert checked == [(0, (1,), 0), (1, (1,), 1)]
+    assert all(type(value) is int for y, m, d in checked for value in (y, *m, d))
+    assert model.format_inequality(aliased) == (
+        "P(Y=0, M1=1 | D=0) + P(Y=1, M1=1 | D=1) <= 1"
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        model.format_inequality([(0, (1,), 0), (0.0, (True,), 0)])
+
+
+@pytest.mark.parametrize("bad", [42, "node", 1.5, None])
+def test_inequality_non_tuple_nodes_are_type_errors(bad):
+    with pytest.raises(TypeError, match="tuples"):
+        MediationModel(**ONE_BINARY).format_inequality([bad])
+
+
+@pytest.mark.parametrize("sets, match", [
+    ([(9, (0,), 0)], "format_inequality"),  # a node-like tuple, not a collection of nodes
+    ([([0, (0,), 0],)], "hashable"),  # a set whose only node is a list
+])
+def test_format_inequalities_detects_node_like_tuples_and_unhashable_nodes(sets, match):
+    with pytest.raises(TypeError, match=match):
+        MediationModel(**ONE_BINARY).format_inequalities(sets)

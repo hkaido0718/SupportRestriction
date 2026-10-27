@@ -9,9 +9,9 @@ Kaido and Ponomarev (2025).
 |---|---|
 | `iv_model.py` | The `IVModel` class (networkx and `support_validation` are its only dependencies) |
 | `support_validation.py` | `validate_support(values, name)`, the support validator shared with `PartialMonotonicityModel` (see `partial_monotonicity_handover.md`) |
-| `tests/test_iv_model.py` | pytest suite: binary supports, edge table, larger supports, input validation, the nonincreasing direction, then additional checks |
+| `tests/test_iv_model.py` | pytest suite: binary supports, edge table, larger supports, input validation, the nonincreasing direction, additional checks, then the inequalities |
 | `tests/conftest.py` | Puts the repository root on `sys.path`, so the tests can `import iv_model` from any working directory, as the notebook does |
-| `IVModel_Exclusion_Monotonicity.ipynb` | The three specifications through `build_graph()` and the existing `GraphAnalyzer` (plot, MISs, regularity), the nonincreasing direction of D-monotonicity, and a three-valued instrument |
+| `IVModel_Exclusion_Monotonicity.ipynb` | The three specifications through `build_graph()` and the existing `GraphAnalyzer` (plot, MISs written as inequalities by `format_inequalities`, regularity), the nonincreasing direction of D-monotonicity, and a three-valued instrument |
 
 `GraphAnalyzer` and the rest of the library are unchanged apart from the plotting fix
 described at the end, and `iv_model.py` does not import the analyzer; the notebook
@@ -37,6 +37,7 @@ model = IVModel(y_support=(0, 1), d_support=(0, 1), z_support=(0, 1),
                 d_monotonicity_direction="nondecreasing")
 G = model.build_graph()
 analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
+inequalities = model.format_inequalities(analyzer.find_mis_excluding_single_group())
 ```
 
 - Attributes: `y_support`, `d_support`, `z_support` (validated, sorted tuples),
@@ -47,7 +48,9 @@ analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
 - Methods: `_validate_support(values, name)` (delegates to the shared
   `support_validation.validate_support`), `_make_nodes()`, `group_fn(node)`,
   `violates_exclusion(u, v)`, `violates_d_monotonicity(u, v)`,
-  `violate_pairwise_fn(u, v)`, `build_graph()`, `summary()`, and `__repr__`.
+  `violate_pairwise_fn(u, v)`, `build_graph()`, `_check_independent_set(independent_set)`,
+  `format_inequality(independent_set)`, `format_inequalities(independent_sets)`,
+  `summary()`, and `__repr__`.
 - Direction of D-monotonicity. `d_monotonicity_direction` is the last constructor
   argument and defaults to `"nondecreasing"`, which imposes `D(z) <= D(z')` whenever
   `z < z'` as before; `"nonincreasing"` imposes `D(z) >= D(z')` whenever `z < z'`. Equal
@@ -69,6 +72,27 @@ analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
 - Supports may be given in any order and as any non-string iterable (tuple, list,
   range, NumPy array); comparisons use the numeric values. A single-valued support is
   allowed (one instrument value gives a graph with no edges).
+- Inequalities (added 2026-10-27, replacing the `inequality` helpers that the notebooks
+  used to define). `format_inequality(independent_set)` writes one independent set of
+  the graph as the inequality it implies, as a string such as
+  `P(Y=0, D=0 | Z=0) + P(Y=1, D=0 | Z=1) <= 1`: each node `(y, d, z)` contributes
+  `P(Y=y, D=d | Z=z)`, and when the set contains every outcome value for a treatment
+  value `d` at an instrument value `z` those terms merge into `P(D=d | Z=z)` (the
+  propensity-score inequality under D-monotonicity alone). Terms are ordered by `z`,
+  then `d`, then `y`, in support order. `format_inequalities(independent_sets)` maps it
+  over a sequence of sets and returns a list of strings in the same order; it is meant
+  for the output of `GraphAnalyzer.find_mis_excluding_single_group()`. Every set is
+  validated by `_check_independent_set`: `TypeError` for a string, a non-iterable, an
+  element that is not a tuple, or a tuple with an unhashable entry; `ValueError` for an
+  empty set, a tuple that is not a node of the model, a duplicate node, or two
+  cross-group nodes that `violate_pairwise_fn` does not reject (an edge of the graph,
+  so the two events are not mutually exclusive and the inequality would not be
+  implied). Nodes are matched to `nodes` by numeric equality (`1.0`, `numpy.int64(1)`
+  and `True` all select the node whose value is `1`) and the string shows the support
+  values. A set inside a single instrument value is accepted; its inequality holds
+  trivially. Passing one set to `format_inequalities` instead of a sequence of sets is
+  a `TypeError` that points to `format_inequality` (its first element is then a tuple
+  that starts with a number, not a collection of nodes).
 - Not implemented: outcome monotonicity, the `build_pairwise_graph` refactor.
 
 ## The pairwise rules and why `or` combines them correctly
@@ -151,17 +175,10 @@ test. Run from the repository root:
 uv run --python 3.12 --with pytest --with networkx --with numpy python -m pytest tests -q
 ```
 
-Result on 2026-10-02 with Python 3.12.13, networkx 3.7, and NumPy 2.5.3:
-
-```
-........................................................................ [ 42%]
-........................................................................ [ 84%]
-...........................                                              [100%]
-171 passed in 0.31s
-```
-
-The same 171 tests pass with networkx 3.4.2 and NumPy 2.2.6, the versions of the local
-Jupyter kernel.
+Result on 2026-10-27 with Python 3.12.13, networkx 3.7, NumPy 2.5.4 and pytest 9.1.1:
+657 passed for the whole suite, 232 of them for `IVModel` (171 before the inequality
+tests of 2026-10-27, which added 61). The same 657 tests pass with networkx 3.4.2 and
+NumPy 2.2.6, the versions of the local Jupyter kernel.
 
 Contents, in order:
 
@@ -197,14 +214,28 @@ Contents, in order:
    (checked on the AST), single-valued supports, positional arguments, `repr` round trip,
    rejection of booleans, complex numbers, scalars and `Decimal`, acceptance of
    `Fraction`, `range`, lists and NumPy arrays.
+7. Inequalities: hand-checked strings for the three binary specifications (the four
+   Pearl pairs, the merged propensity-score inequality, two of the mixed Balke-Pearl /
+   Kitagawa sets) and for the nonincreasing direction; single-group and one-node sets;
+   term order by `z`, `d`, `y` for list, tuple, set, frozenset and iterator inputs;
+   merging only with the complete outcome support (three outcome values); every
+   validation error through `_check_independent_set`, `format_inequality` and
+   `format_inequalities`; order preservation, the empty list, invalid outer inputs and
+   a single set passed to `format_inequalities`; and, for every multi-group MIS of the
+   three binary graphs found with networkx, a term count equal to the number of nodes
+   minus the number of complete outcome pairs; numeric aliases of node values (float,
+   NumPy scalar, bool) matched to the model's nodes and printed as support values;
+   non-tuple nodes; and node-like tuples or unhashable nodes passed to
+   `format_inequalities`.
 
 ## Notebook
 
 `IVModel_Exclusion_Monotonicity.ipynb` builds the three binary models, prints
-`summary()`, plots each graph with `plot_grouped_on_circle`, lists the MISs and
-translates them into inequalities (Pearl's instrumental inequalities for exclusion,
-the propensity-score inequality for monotonicity, the Balke-Pearl / Kitagawa
-inequalities plus one redundant monotonicity inequality for both), and runs
+`summary()`, plots each graph with `plot_grouped_on_circle`, lists the MISs together
+with the inequalities written by `format_inequalities` (Pearl's instrumental
+inequalities for exclusion, the propensity-score inequality for monotonicity, the
+Balke-Pearl / Kitagawa inequalities plus one redundant monotonicity inequality for
+both), and runs
 `is_perfect()` and the maximal-clique check. A section on the nonincreasing direction
 repeats the counts, plots, MISs and regularity check for
 `d_monotonicity_direction="nonincreasing"` with and without exclusion; the inequalities
@@ -216,10 +247,11 @@ restores perfectness.
 
 The notebook runs from inside the repository (the setup cell finds `iv_model.py` and
 does not clone) and in Google Colab, where the setup cell clones the repository and
-checks out `REPO_REF`, set to the branch under review, `atsuki-iv_model`; change it to
-`main` after the merge, together with the Colab badge link. It was executed in place
-with nbconvert on 2026-10-02 under Python 3.12.13 with matplotlib 3.11.2, networkx 3.7,
-pandas 3.0.6, and NumPy 2.5.3. The call to `matplotlib.cm.get_cmap` in
+checks out `REPO_REF`, set to the branch under review,
+`atsuki-update_functions_documents`; change it to `main` after the merge, together
+with the Colab badge link. It was last executed in place with nbconvert on 2026-10-27
+under Python 3.12.13 with matplotlib 3.11.2, networkx 3.7, pandas 3.1.0 and NumPy
+2.5.4. The call to `matplotlib.cm.get_cmap` in
 `plot_grouped_on_circle`, deprecated since matplotlib 3.7 and removed in 3.11, was
 replaced by `matplotlib.pyplot.get_cmap(cmap_name, K)` (commit `c7e1cae`), so the plots
 run on matplotlib 3.10 and 3.11; the second argument keeps one colour per instrument

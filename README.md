@@ -1,9 +1,9 @@
 # SupportRestriction
 This repository collects codes and Jupyter notebooks that illustrate how to use the framework of Kaido and Ponomarev (2025) to obtain the sharp testable implication of a potential outcome model. It contains the following files.
 - graph_analysis_utils.py: A library containing Python functions to build/plot a graph, derive MISs, and check regularity
-- iv_model.py: An `IVModel` class that builds the potential response graph of a discrete IV model under exclusion and/or D-monotonicity (nondecreasing or nonincreasing in the instrument)
-- partial_monotonicity_model.py: A `PartialMonotonicityModel` class for a vector instrument with any number of discrete coordinates, imposing partial monotonicity of the treatment in each coordinate and, optionally, exclusion
-- mediation_model.py: A `MediationModel` class for a discrete mediation model with a scalar outcome, a scalar assigned treatment and any number of discrete mediators, imposing full mediation through a selected set of mediator coordinates (no direct treatment effect)
+- iv_model.py: An `IVModel` class that builds the potential response graph of a discrete IV model under exclusion and/or D-monotonicity (nondecreasing or nonincreasing in the instrument) and writes the maximal independent sets of the graph as inequalities in conditional probabilities (`format_inequalities`)
+- partial_monotonicity_model.py: A `PartialMonotonicityModel` class for a vector instrument with any number of discrete coordinates, imposing partial monotonicity of the treatment in each coordinate and, optionally, exclusion; it also writes the maximal independent sets of its graph as inequalities (`format_inequalities`)
+- mediation_model.py: A `MediationModel` class for a discrete mediation model with a scalar outcome, a scalar assigned treatment and any number of discrete mediators, imposing full mediation through a selected set of mediator coordinates (no direct treatment effect); it also writes the maximal independent sets of its graph as inequalities (`format_inequalities`)
 - support_validation.py: The support validator shared by `IVModel`, `PartialMonotonicityModel` and `MediationModel`
 - Partial_Monotonicity.ipynb: demonstrates an application of the library to the partial monotonicity example
 - Interference.ipynb: Derives sharp identifying restrictions for spillover effects in the empirical application

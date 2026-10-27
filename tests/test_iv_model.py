@@ -2,7 +2,7 @@
 
 The first four groups cover the binary supports, the edge table, larger supports, and
 input validation; the fifth covers the nonincreasing direction of D-monotonicity; the
-groups after them are additional checks. Every expected edge is either written out by
+groups after them are additional checks and the inequalities. Every expected edge is either written out by
 hand, with the mathematical reason in the docstring or a comment, or derived by
 enumerating potential-response vectors (Method 2 of Kaido and Ponomarev, 2025). None is
 produced by the violation functions under test.
@@ -829,3 +829,191 @@ def test_numpy_scalars_are_converted_to_python_numbers():
         IVModel(**dict(BINARY, y_support=(np.bool_(True), 0)))
     with pytest.raises(TypeError):
         IVModel(**BINARY, exclusion=np.bool_(True))
+
+
+# --------------------------------------------------------------------------- inequalities
+
+
+@pytest.mark.parametrize("spec, independent_set, expected", [
+    (
+        "exclusion", [(0, 0, 1), (1, 0, 0)],
+        "P(Y=1, D=0 | Z=0) + P(Y=0, D=0 | Z=1) <= 1",
+    ),
+    (
+        "exclusion", [(0, 1, 0), (1, 1, 1)],
+        "P(Y=0, D=1 | Z=0) + P(Y=1, D=1 | Z=1) <= 1",
+    ),
+    (
+        "monotonicity", [(0, 0, 1), (0, 1, 0), (1, 0, 1), (1, 1, 0)],
+        "P(D=1 | Z=0) + P(D=0 | Z=1) <= 1",
+    ),
+    (
+        "both", [(0, 0, 1), (0, 1, 1), (1, 0, 1), (1, 1, 0)],
+        "P(Y=1, D=1 | Z=0) + P(D=0 | Z=1) + P(Y=0, D=1 | Z=1) <= 1",
+    ),
+    (
+        "both", [(0, 0, 1), (0, 1, 0), (1, 0, 0), (1, 1, 0)],
+        "P(Y=1, D=0 | Z=0) + P(D=1 | Z=0) + P(Y=0, D=0 | Z=1) <= 1",
+    ),
+    ("exclusion", [(0, 0, 0), (1, 0, 0)], "P(D=0 | Z=0) <= 1"),
+    ("exclusion", [(0, 0, 0)], "P(Y=0, D=0 | Z=0) <= 1"),
+])
+def test_format_inequality_hand_checked(spec, independent_set, expected):
+    """Only complete outcome supports merge; single-group sets are also accepted."""
+    model = IVModel(**BINARY, **SPECS[spec])
+    checked = model._check_independent_set(independent_set)
+    assert type(checked) is list and checked == independent_set
+    text = model.format_inequality(independent_set)
+    assert type(text) is str and text == expected
+    assert text.endswith(" <= 1")
+
+
+def test_format_inequality_nonincreasing():
+    """Rising treatment is excluded, and both outcomes merge at each instrument."""
+    model = IVModel(
+        **BINARY, **SPECS["monotonicity"], d_monotonicity_direction="nonincreasing"
+    )
+    independent_set = [(0, 0, 0), (0, 1, 1), (1, 0, 0), (1, 1, 1)]
+    assert model.format_inequality(independent_set) == (
+        "P(D=0 | Z=0) + P(D=1 | Z=1) <= 1"
+    )
+
+
+@pytest.mark.parametrize("make_set", [list, tuple, set, frozenset, iter])
+def test_inequality_input_containers_and_term_order(make_set):
+    """Terms follow z, d, y support order, even with incomplete outcome coverage."""
+    model = IVModel((2, 1, 0), (1, 0), (1, 0), **SPECS["both"])
+    nodes = [(2, 0, 1), (1, 1, 0), (0, 1, 0), (1, 0, 0)]
+    checked = model._check_independent_set(make_set(nodes))
+    assert type(checked) is list and set(checked) == set(nodes)
+    if make_set in (list, tuple, iter):
+        assert checked == nodes
+    assert model.format_inequality(make_set(nodes)) == (
+        "P(Y=1, D=0 | Z=0) + P(Y=0, D=1 | Z=0) + "
+        "P(Y=1, D=1 | Z=0) + P(Y=2, D=0 | Z=1) <= 1"
+    )
+
+
+@pytest.mark.parametrize("independent_set, expected", [
+    ([(0, 0, 0), (1, 0, 0)], "P(Y=0, D=0 | Z=0) + P(Y=1, D=0 | Z=0) <= 1"),
+    ([(0, 0, 0), (1, 0, 0), (2, 0, 0)], "P(D=0 | Z=0) <= 1"),
+])
+def test_format_inequality_three_outcomes_merge_only_when_complete(independent_set, expected):
+    model = IVModel((0, 1, 2), (0, 1), (0, 1))
+    assert model.format_inequality(independent_set) == expected
+
+
+@pytest.mark.parametrize("method", [
+    "_check_independent_set", "format_inequality", "format_inequalities",
+])
+@pytest.mark.parametrize("bad, exc, match", [
+    ("abc", TypeError, "string"),
+    (b"abc", TypeError, "string"),
+    (bytearray(b"abc"), TypeError, "string"),
+    (3, TypeError, "iterable"),
+    ([[0, 0, 0]], TypeError, "hashable"),
+    ([], ValueError, "at least one node"),
+    ([(2, 0, 0)], ValueError, "not a node"),
+    ([(0, 0, 0), (0, 0, 0)], ValueError, "duplicate"),
+    ([(0, 0, 0), (0, 0, 1)], ValueError, "adjacent"),
+])
+def test_inequality_validation(method, bad, exc, match):
+    """All entry points reject invalid sets, including an adjacent cross-group pair."""
+    model = IVModel(**BINARY, **SPECS["exclusion"])
+    argument = [bad] if method == "format_inequalities" else bad
+    with pytest.raises(exc, match=match):
+        getattr(model, method)(argument)
+
+
+@pytest.mark.parametrize("make_sets", [list, tuple, iter])
+def test_format_inequalities_preserves_input_order(make_sets):
+    model = IVModel(**BINARY)
+    independent_sets = [
+        [(0, 1, 0), (1, 1, 1)],
+        [(0, 0, 1), (1, 0, 0)],
+        [(0, 1, 0), (1, 1, 1)],
+    ]
+    texts = model.format_inequalities(make_sets(independent_sets))
+    assert type(texts) is list
+    assert all(type(text) is str and text.endswith(" <= 1") for text in texts)
+    assert texts == [
+        "P(Y=0, D=1 | Z=0) + P(Y=1, D=1 | Z=1) <= 1",
+        "P(Y=1, D=0 | Z=0) + P(Y=0, D=0 | Z=1) <= 1",
+        "P(Y=0, D=1 | Z=0) + P(Y=1, D=1 | Z=1) <= 1",
+    ]
+
+
+def test_format_inequalities_empty():
+    texts = IVModel(**BINARY).format_inequalities([])
+    assert type(texts) is list and texts == []
+
+
+@pytest.mark.parametrize("bad", ["abc", b"abc", bytearray(b"abc"), 3])
+def test_format_inequalities_rejects_invalid_outer_input(bad):
+    with pytest.raises(TypeError):
+        IVModel(**BINARY).format_inequalities(bad)
+
+
+def test_format_inequalities_rejects_a_single_independent_set():
+    with pytest.raises(TypeError, match="format_inequality"):
+        IVModel(**BINARY).format_inequalities([(0, 0, 1), (1, 0, 0)])
+
+
+@pytest.mark.parametrize("spec, count, term_counts", [
+    ("exclusion", 4, [2, 2, 2, 2]),
+    ("monotonicity", 1, [2]),
+    ("both", 5, [2, 3, 3, 3, 3]),
+])
+def test_format_inequalities_all_binary_multigroup_mis(spec, count, term_counts):
+    """Exclusion has no merges; monotonicity merges both cells; both has four mixed sets."""
+    model = IVModel(**BINARY, **SPECS[spec])
+    G = model.build_graph()
+    mis_list = [
+        sorted(c) for c in nx.find_cliques(nx.complement(G))
+        if len({model.group_fn(n) for n in c}) > 1
+    ]
+    texts = model.format_inequalities(mis_list)
+    assert type(texts) is list and len(texts) == len(mis_list) == count
+    assert sorted(text.count("P(") for text in texts) == term_counts
+    for independent_set, text in zip(mis_list, texts):
+        assert type(text) is str and text.endswith(" <= 1")
+        # Each cell containing both binary outcomes loses exactly one term.
+        merges = sum(
+            (0, d, z) in independent_set and (1, d, z) in independent_set
+            for d, z in product((0, 1), repeat=2)
+        )
+        assert text.count("P(") == len(independent_set) - merges
+        if spec == "exclusion":
+            assert merges == 0 and len(independent_set) == 2
+        elif spec == "monotonicity":
+            assert merges == 2 and len(independent_set) == 4
+
+
+def test_inequality_nodes_are_matched_by_value_and_written_with_support_values():
+    """Aliases of a support value (float, NumPy scalar, bool) select the model's node."""
+    np = pytest.importorskip("numpy")
+    model = IVModel(**BINARY)
+    aliased = [(np.int64(0), 0.0, True), (1, 0, 0)]
+    checked = model._check_independent_set(aliased)
+    assert checked == [(0, 0, 1), (1, 0, 0)]
+    assert all(type(value) is int for node in checked for value in node)
+    assert model.format_inequality(aliased) == (
+        "P(Y=1, D=0 | Z=0) + P(Y=0, D=0 | Z=1) <= 1"
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        model.format_inequality([(0, 0, 1), (0.0, 0, True)])
+
+
+@pytest.mark.parametrize("bad", [42, "node", 1.5, None])
+def test_inequality_non_tuple_nodes_are_type_errors(bad):
+    with pytest.raises(TypeError, match="tuples"):
+        IVModel(**BINARY).format_inequality([bad])
+
+
+@pytest.mark.parametrize("sets, match", [
+    ([(9, 0, 0)], "format_inequality"),  # a node-like tuple, not a collection of nodes
+    ([([0, 0, 0],)], "hashable"),  # a set whose only node is a list
+])
+def test_format_inequalities_detects_node_like_tuples_and_unhashable_nodes(sets, match):
+    with pytest.raises(TypeError, match=match):
+        IVModel(**BINARY).format_inequalities(sets)

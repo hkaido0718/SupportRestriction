@@ -11,8 +11,8 @@ supervisor's notes of October 1, 2026.
 |---|---|
 | `partial_monotonicity_model.py` | The `PartialMonotonicityModel` class (networkx and `support_validation` are its only dependencies) |
 | `support_validation.py` | `validate_support(values, name)`, the support validator shared by `IVModel` and `PartialMonotonicityModel` |
-| `tests/test_partial_monotonicity_model.py` | pytest suite: two binary instruments, the exclusion switch, one instrument against `IVModel`, nonbinary supports, three binary instruments, invariance, validation and interface |
-| `PartialMonotonicityModel.ipynb` | The examples of the specification through `build_graph()` and `GraphAnalyzer` |
+| `tests/test_partial_monotonicity_model.py` | pytest suite: two binary instruments, the exclusion switch, one instrument against `IVModel`, nonbinary supports, three binary instruments, invariance, validation and interface, inequalities |
+| `PartialMonotonicityModel.ipynb` | The examples of the specification through `build_graph()` and `GraphAnalyzer`, with the MISs written as inequalities by `format_inequalities` |
 
 `IVModel` is unchanged apart from `_validate_support`, which now delegates to the shared
 `validate_support` (same behaviour, same error messages). The supervisor's
@@ -30,6 +30,7 @@ model = PartialMonotonicityModel(
 )
 G = model.build_graph()
 analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
+inequalities = model.format_inequalities(analyzer.find_mis_excluding_single_group())
 ```
 
 - Partial monotonicity is always imposed: `D(z)` is nondecreasing in each coordinate
@@ -46,7 +47,9 @@ analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
 - Methods: `_validate_z_supports(z_supports)`, `_make_nodes()`, `group_fn(node)`
   (returns `node[2]`, the full instrument vector), `_leq(z, zp)` (componentwise `<=`; vectors of different lengths raise `ValueError`),
   `violates_exclusion(u, v)`, `violates_partial_monotonicity(u, v)`,
-  `violate_pairwise_fn(u, v)`, `build_graph()`, `summary()`, and `__repr__`
+  `violate_pairwise_fn(u, v)`, `build_graph()`, `_check_independent_set(independent_set)`,
+  `_label_instrument(z)` (`"Z1=0, Z2=1"`), `format_inequality(independent_set)`,
+  `format_inequalities(independent_sets)`, `summary()`, and `__repr__`
   (`eval(repr(model))` rebuilds the model).
 - Validation. `z_supports` must be an iterable of at least one coordinate support;
   each coordinate support is validated by `validate_support` (nonempty, distinct,
@@ -55,6 +58,30 @@ analyzer = GraphAnalyzer(G, group_fn=model.group_fn)
   `((0, 1),)`; a string, a non-iterable, or a string coordinate is a `TypeError`;
   no coordinates, an empty coordinate, a duplicate, `nan` or `inf` is a `ValueError`.
   Messages name the coordinate as `z_supports[j]`. `exclusion` must be a `bool`.
+- Inequalities (added 2026-10-27, replacing the `inequality` helper that the notebook
+  used to define). `format_inequality(independent_set)` writes one independent set of
+  the graph as the inequality it implies, as a string such as
+  `P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=1) <= 1`: each node `(y, d, z)` contributes
+  `P(Y=y, D=d | Z1=z[0], ..., Zm=z[m-1])`, the instrument vector spelled coordinate by
+  coordinate as in `summary()` (the notebook helper wrote `Z=(0, 0)`), and when the set
+  contains every outcome value for a treatment value `d` at an instrument vector `z`
+  those terms merge into `P(D=d | Z1=..., Zm=...)`. Terms are ordered by instrument
+  vector (product order), then `d`, then `y`. `format_inequalities(independent_sets)`
+  maps it over a sequence of sets and returns a list of strings in the same order; it
+  is meant for the output of `GraphAnalyzer.find_mis_excluding_single_group()`. Every
+  set is validated by `_check_independent_set`: `TypeError` for a string, a
+  non-iterable, an element that is not a tuple, or a tuple with an unhashable entry;
+  `ValueError` for an empty set, a tuple that is not a node of the model, a duplicate
+  node, or two cross-group nodes that `violate_pairwise_fn` does not reject (an edge of
+  the graph, so the events are not mutually exclusive). Nodes are matched to `nodes` by
+  numeric equality (`1.0`, `numpy.int64(1)` and `True` all select the node whose value
+  is `1`) and the string shows the support values. A set inside a single instrument
+  vector is accepted; its inequality holds trivially. Passing one set to
+  `format_inequalities` instead of a sequence of sets is a `TypeError` that points to
+  `format_inequality` (its first element is then a tuple that starts with a number, not
+  a collection of nodes). With one instrument coordinate the
+  strings equal those of `IVModel` with nondecreasing D-monotonicity after replacing
+  `Z=` by `Z1=`; the tests check this.
 - `summary()` lists each coordinate support, the number of instrument vectors, and the
   assumptions; it says partial monotonicity is always imposed and whether exclusion is.
 
@@ -126,8 +153,11 @@ of `Partial_Monotonicity.ipynb`. Run from the repository root:
 uv run --python 3.12 --with pytest --with networkx --with numpy python -m pytest tests -q
 ```
 
-Result on 2026-10-05 with Python 3.12.13, networkx 3.7, NumPy 2.5.3 and pytest 9.1.1: 321 passed (171 for
-`IVModel`, 150 for `PartialMonotonicityModel`).
+Result on 2026-10-27 with Python 3.12.13, networkx 3.7, NumPy 2.5.4 and pytest 9.1.1:
+657 passed (232 for `IVModel`, 219 for `PartialMonotonicityModel`, 206 for
+`MediationModel`); the inequality tests of 2026-10-27 added 69 to this file. The same
+657 tests pass with networkx 3.4.2 and NumPy 2.2.6, the versions of the local Jupyter
+kernel.
 
 Contents, in order:
 
@@ -154,22 +184,39 @@ Contents, in order:
    Boolean predicates; a fresh graph on each call; `group_fn`; `summary()` content; no
    analyzer import (AST check); the shared validator; single-vector and single-valued
    supports; the lexicographic-order trap.
+8. Inequalities: the five hand-checked monotonicity inequalities, a mixed set under
+   exclusion, single-group and one-node sets; `_label_instrument` on one, two and
+   three coordinates with negative and float values; term order (product order of the
+   instrument vectors, then `d`, then `y`) for list, tuple, set, frozenset and
+   iterator inputs; an incomparable pair under exclusion; merging only with the
+   complete outcome support; every validation error through the three entry points;
+   order preservation, the empty list, invalid outer inputs and a single set passed to
+   `format_inequalities`; the term count of every multi-group MIS (5 and 45) against
+   the number of complete outcome pairs; equality with the `IVModel` strings for one
+   instrument coordinate after relabelling; numeric aliases of node values (float,
+   NumPy scalar, bool) matched to the model's nodes and printed as support values;
+   non-tuple nodes; and node-like tuples or unhashable nodes passed to
+   `format_inequalities`.
 
 ## Notebook
 
 `PartialMonotonicityModel.ipynb` builds the two-binary-instrument model with and without
 exclusion, prints `summary()`, checks the named pairs, plots both graphs, lists the
-MISs as inequalities (the five inequalities of `Partial_Monotonicity.ipynb` without
-exclusion), and runs the perfectness and maximal-clique checks. It then shows agreement
-with `IVModel` for one instrument, the 54-node nonbinary example with a table of
+MISs as the inequalities written by `format_inequalities` (the five inequalities of
+`Partial_Monotonicity.ipynb` without exclusion, with the instrument vector spelled
+coordinate by coordinate), and runs the perfectness and maximal-clique checks. It then
+shows agreement with `IVModel` for one instrument, the 54-node nonbinary example with a
+table of
 hand-checked pairs, and the three-binary-instrument example with pairs decided by the
 third coordinate. The perfectness check is not run on the 54- and 32-node graphs
 because `is_perfect()` enumerates vertex subsets.
 
 The setup cell clones the repository and checks out `REPO_REF` only when
 `partial_monotonicity_model.py` is absent from the working directory (Colab);
-`REPO_REF` is the branch under review, `atsuki-iv_partial_monotonicity_class`, to be
-changed to `main` after the merge together with the Colab badge link.
+`REPO_REF` is the branch under review, `atsuki-update_functions_documents`, to be
+changed to `main` after the merge together with the Colab badge link. The notebook was
+last executed in place with nbconvert on 2026-10-27 under Python 3.12.13 with
+matplotlib 3.11.2, networkx 3.7, pandas 3.1.0 and NumPy 2.5.4.
 
 ## Not implemented
 

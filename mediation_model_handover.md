@@ -12,12 +12,14 @@ design of `IVModel` and `PartialMonotonicityModel` (see `iv_model_handover.md` a
 |---|---|
 | `mediation_model.py` | The `MediationModel` class (networkx and `support_validation` are its only dependencies) |
 | `support_validation.py` | `validate_support(values, name)`, the support validator shared by the three model classes; unchanged |
-| `tests/test_mediation_model.py` | pytest suite: one binary mediator, two binary mediators (all selected versus `M1` only), nonbinary supports and a three-valued treatment, three binary mediators, invariance, validation and interface |
-| `MediationModel.ipynb` | The examples of the specification through `build_graph()` and `GraphAnalyzer` |
+| `tests/test_mediation_model.py` | pytest suite: one binary mediator, two binary mediators (all selected versus `M1` only), nonbinary supports and a three-valued treatment, three binary mediators, invariance, validation and interface, inequalities |
+| `MediationModel.ipynb` | The examples of the specification through `build_graph()` and `GraphAnalyzer`, with the MISs written as inequalities by `format_inequalities` |
 | `README.md` | File list extended by the three new files |
 
-No existing module or test changes. The notebook imports the model and the analyzer
-separately:
+The original delivery (merged as PR #5) changed no existing module or test; the update
+of 2026-10-27 added `format_inequalities` to all three model classes, with tests, and
+removed the `inequality` helper the notebook used to define. The notebook imports the
+model and the analyzer separately:
 
 ```python
 from mediation_model import MediationModel
@@ -63,6 +65,8 @@ model = MediationModel(
 )
 graph = model.build_graph()
 analyzer = GraphAnalyzer(graph, group_fn=model.group_fn)
+independent_sets = analyzer.find_mis_excluding_single_group()
+inequalities = model.format_inequalities(independent_sets)
 ```
 
 - Attributes: `y_support`, `d_support` (sorted tuples); `m_supports` (tuple of sorted
@@ -80,6 +84,10 @@ analyzer = GraphAnalyzer(graph, group_fn=model.group_fn)
   `node[2]`, the assigned treatment), `violates_mediation(u, v)`,
   `violate_pairwise_fn(u, v)` (delegates to `violates_mediation`; the name is the
   interface shared with the other classes and with `GraphAnalyzer`), `build_graph()`,
+  `_check_independent_set(independent_set)`, `_label_mediators(m)` (`"M1=0, M2=1"`),
+  `_label_selected(s)` (the selected profile with the names of the selected
+  coordinates, `"M1=0, M3=1"` for `active_mediators == (0, 2)`),
+  `format_inequality(independent_set)`, `format_inequalities(independent_sets)`,
   `summary()`, and `__repr__` (shows the resolved indices even when `"all"` was
   supplied; `eval(repr(model))` rebuilds the model).
 - Validation of supports. `y_support`, `d_support` and every coordinate of
@@ -102,6 +110,34 @@ analyzer = GraphAnalyzer(graph, group_fn=model.group_fn)
   | empty selection, duplicate index, index outside `range(n_mediators)` (negative indices included) | `ValueError` |
   | a list, tuple, set, generator or NumPy integer array of valid indices | accepted; NumPy integers become `int`; stored sorted, so `(1, 0)` and `(0, 1)` give the same model and the same `repr` |
 
+- Inequalities (added 2026-10-27, replacing the `inequality(mis, model)` helper that the
+  notebook used to define). `format_inequality(independent_set)` writes one
+  independent set of the graph as the inequality it implies, as a string such as
+  `P(Y=0, M1=0 | D=0) + P(Y=1, M1=0 | D=1) <= 1`: each node `(y, m, d)` contributes
+  `P(Y=y, M1=m[0], ..., MJ=m[J-1] | D=d)`. Two merges shorten the expression. When,
+  for an outcome `y` and a selected profile `s`, the set contains every mediator
+  vector with that profile, the unselected coordinates are summed out and the term is
+  written with the selected coordinates only (`P(Y=1, M1=0 | D=0)` under
+  `active_mediators=(0,)`); with every coordinate selected this is the full label.
+  When, in addition, every outcome value is present for that profile, the outcome is
+  summed out too, `P(M1=0 | D=0)`. A set that covers only some vectors of a profile is
+  written vector by vector for that outcome. Terms are ordered by `d`, then selected
+  profile, then `y`, then `m`, in support order. `format_inequalities(independent_sets)`
+  maps it over a sequence of sets and returns a list of strings in the same order; it
+  is meant for the output of `GraphAnalyzer.find_mis_excluding_single_group()`. Every
+  set is validated by `_check_independent_set`: `TypeError` for a string, a
+  non-iterable, an element that is not a tuple, or a tuple with an unhashable entry;
+  `ValueError` for an empty set, a tuple that is not a node of the model, a duplicate
+  node, or two cross-treatment nodes that `violates_mediation` does not reject (an edge
+  of the graph, so the events are not mutually exclusive). Nodes are matched to `nodes`
+  by numeric equality (`1.0`, `numpy.int64(1)` and `True` all select the node whose
+  value is `1`) and the string shows the support values. A set inside a single
+  treatment value is accepted; its inequality holds trivially. Passing one set to
+  `format_inequalities` instead of a sequence of sets is a `TypeError` that points to
+  `format_inequality` (its first element is then a tuple that starts with a number, not
+  a collection of nodes). With one mediator the strings equal
+  those of the exclusion-only `IVModel` after renaming `D` to `M1` and `Z` to `D`; the
+  tests check this.
 - `summary()` lists the supports coordinate by coordinate, the size of the product
   support, the selected coordinates, the restriction in the form imposed (whole vector,
   or selected coordinates with the unselected ones named), that no monotonicity is
@@ -187,9 +223,11 @@ model's rules), or compared with `IVModel`. Run from the repository root:
 uv run --python 3.12 --with pytest --with networkx --with numpy python -m pytest tests -q
 ```
 
-Result on 2026-10-16 with Python 3.12.13, networkx 3.7, NumPy 2.5.4 and pytest 9.1.1:
-451 passed (171 for `IVModel`, 150 for `PartialMonotonicityModel`, 130 for
-`MediationModel`); the two existing test files are unchanged.
+Result on 2026-10-27 with Python 3.12.13, networkx 3.7, NumPy 2.5.4 and pytest 9.1.1:
+657 passed (232 for `IVModel`, 219 for `PartialMonotonicityModel`, 206 for
+`MediationModel`); the inequality tests of 2026-10-27 added 76 to this file and 61 and
+69 to the other two. The same 657 tests pass with networkx 3.4.2 and NumPy 2.2.6, the
+versions of the local Jupyter kernel.
 
 Contents, in order:
 
@@ -224,12 +262,26 @@ Contents, in order:
    import (AST check); the shared validator; single-valued treatment, single-valued
    outcome and single-profile supports; `_project_mediators` on three coordinates and
    on vectors of the wrong length.
+7. Inequalities: hand-checked strings for one binary mediator, for two binary
+   mediators with all coordinates selected and with `M1` only (full and partial
+   coverage of `M2`), for the `(0, 2)` selection of three mediators, and for
+   single-group sets; `_label_mediators` and `_label_selected` (selected profiles keep
+   the original coordinate names); term order (`d`, then selected profile, then `y`,
+   then `m`) for list, tuple, set, frozenset and iterator inputs; summing out `Y` only
+   with the complete outcome support; every validation error through the three entry
+   points; order preservation, the empty list, invalid outer inputs and a single set
+   passed to `format_inequalities`; the term count of every multi-group MIS of the
+   three binary graphs; equality with the exclusion-only `IVModel` strings for one
+   mediator after renaming; numeric aliases of node values (float, NumPy scalar, bool)
+   matched to the model's nodes and printed as support values; non-tuple nodes; and
+   node-like tuples or unhashable nodes passed to `format_inequalities`.
 
 ## Notebook
 
 `MediationModel.ipynb` builds the one-binary-mediator model, prints `repr` and
-`summary()`, plots the graph, lists the four MISs as inequalities (Pearl's
-instrumental inequalities with the mediator in the role of the treatment), and runs the
+`summary()`, plots the graph, lists the four MISs as the inequalities written by
+`format_inequalities` (Pearl's instrumental inequalities with the mediator in the role
+of the treatment), and runs the
 perfectness and maximal-clique checks. It then builds the two-binary-mediator model with
 all mediators selected and with `M1` only, prints the counts and the summary that names
 the unselected coordinate, checks the four pairs of the specification in both argument
@@ -240,10 +292,10 @@ checks. `GraphAnalyzer` is constructed separately from the graph in every case.
 
 The setup cell clones the repository and checks out `REPO_REF` only when
 `mediation_model.py` is absent from the working directory (Colab); `REPO_REF` is the
-branch under review, `atsuki-mediation_model`, to be changed to `main` after the merge
-together with the Colab badge link. The notebook was executed in place from a clean
-session with nbconvert on 2026-10-16 under Python 3.12.13 with matplotlib 3.11.2,
-networkx 3.7, pandas 3.0.6 and NumPy 2.5.4.
+branch under review, `atsuki-update_functions_documents`, to be changed to `main`
+after the merge together with the Colab badge link. The notebook was last executed in
+place from a clean session with nbconvert on 2026-10-27 under Python 3.12.13 with
+matplotlib 3.11.2, networkx 3.7, pandas 3.1.0 and NumPy 2.5.4.
 
 ## Not implemented
 
