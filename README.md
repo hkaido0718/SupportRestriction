@@ -13,7 +13,7 @@ This repository collects codes and Jupyter notebooks that illustrate how to use 
 - IVModel_Exclusion_Monotonicity.ipynb: Derives sharp identifying restrictions for the IV model under exclusion and D-monotonicity in either direction using `IVModel`
 - PartialMonotonicityModel.ipynb: Derives the testable implications of partial monotonicity with a vector instrument using `PartialMonotonicityModel`, starting from the two-binary-instrument example of Partial_Monotonicity.ipynb
 - MediationModel.ipynb: Derives the testable implications of the mediation model with one and two binary mediators, with all mediators selected and with one mediator excluded from the outcome response, using `MediationModel`
-- iv_model_handover.md: Notes on the design of `IVModel`
-- partial_monotonicity_handover.md: Notes on the design of `PartialMonotonicityModel`
-- mediation_model_handover.md: Notes on the design of `MediationModel`
+- docs/iv_model.md: User documentation for `IVModel` (model, usage, API reference, reading the inequalities)
+- docs/partial_monotonicity_model.md: User documentation for `PartialMonotonicityModel`
+- docs/mediation_model.md: User documentation for `MediationModel`
 - tests/: pytest suite for `IVModel`, `PartialMonotonicityModel` and `MediationModel` (run `python -m pytest tests -q` from the repository root)
