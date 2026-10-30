@@ -3,7 +3,7 @@
 Groups: (1) binary outcome, binary treatment and two binary instruments; (2) the
 exclusion switch; (3) one instrument against ``IVModel``; (4) small nonbinary supports;
 (5) three binary instruments; (6) invariance to the order of values and relabelling of
-coordinates; (7) input validation and the remaining interface checks.
+coordinates; (7) input validation and the remaining interface checks; (8) inequalities.
 
 Every expected edge is either written out by hand, with the reason in a comment, or
 derived by enumerating potential-response vectors (Method 2 of Kaido and Ponomarev,
@@ -607,3 +607,229 @@ def test_componentwise_order_is_not_lexicographic():
     assert model.violates_partial_monotonicity((0, 5, (0, 20)), (0, 0, (1, 10))) is False
     assert model.violates_partial_monotonicity((0, 0, (0, 20)), (0, 5, (1, 10))) is False
     assert model.build_graph().has_edge((0, 5, (0, 20)), (0, 0, (1, 10)))
+
+
+# --------------------------------------------------------------------------- (8) inequalities
+
+@pytest.mark.parametrize("exclusion, independent_set, expected", [
+    (
+        False, [(0, 0, (1, 0)), (0, 1, (0, 0)), (1, 0, (1, 0)), (1, 1, (0, 0))],
+        "P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=0) <= 1",
+    ),
+    (
+        False, [(0, 0, (0, 1)), (0, 1, (0, 0)), (1, 0, (0, 1)), (1, 1, (0, 0))],
+        "P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=0, Z2=1) <= 1",
+    ),
+    (
+        False, [(0, 0, (1, 1)), (0, 1, (0, 0)), (1, 0, (1, 1)), (1, 1, (0, 0))],
+        "P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=1) <= 1",
+    ),
+    (
+        False, [(0, 0, (1, 1)), (0, 1, (1, 0)), (1, 0, (1, 1)), (1, 1, (1, 0))],
+        "P(D=1 | Z1=1, Z2=0) + P(D=0 | Z1=1, Z2=1) <= 1",
+    ),
+    (
+        False, [(0, 0, (1, 1)), (0, 1, (0, 1)), (1, 0, (1, 1)), (1, 1, (0, 1))],
+        "P(D=1 | Z1=0, Z2=1) + P(D=0 | Z1=1, Z2=1) <= 1",
+    ),
+    (
+        True, [(1, 1, (0, 0)), (0, 0, (1, 1)), (1, 0, (1, 1)), (0, 1, (1, 1))],
+        "P(Y=1, D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=1) + "
+        "P(Y=0, D=1 | Z1=1, Z2=1) <= 1",
+    ),
+    (
+        False, [(0, 0, (0, 0)), (1, 0, (0, 0))],
+        "P(D=0 | Z1=0, Z2=0) <= 1",
+    ),
+    (False, [(0, 0, (0, 0))], "P(Y=0, D=0 | Z1=0, Z2=0) <= 1"),
+])
+def test_format_inequality_hand_checked(exclusion, independent_set, expected):
+    """The five monotonicity inequalities merge both cells; exclusion also gives mixed terms."""
+    model = PartialMonotonicityModel(**TWO_BINARY, exclusion=exclusion)
+    checked = model._check_independent_set(independent_set)
+    assert type(checked) is list and checked == independent_set
+    text = model.format_inequality(independent_set)
+    assert type(text) is str and text == expected
+    assert text.endswith(" <= 1")
+
+
+@pytest.mark.parametrize("z_supports, z, expected", [
+    (((0, 1),), (1,), "Z1=1"),
+    (((0, 1), (0, 1)), (0, 1), "Z1=0, Z2=1"),
+    (((-1, 2), (0, 3), (0.5, 1.5)), (-1, 3, 0.5), "Z1=-1, Z2=3, Z3=0.5"),
+])
+def test_label_instrument(z_supports, z, expected):
+    model = PartialMonotonicityModel((0, 1), (0, 1), z_supports)
+    assert model._label_instrument(z) == expected
+
+
+@pytest.mark.parametrize("make_set", [list, tuple, set, frozenset, iter])
+def test_inequality_input_containers_and_term_order(make_set):
+    """Terms follow instrument vector, treatment, then outcome support order."""
+    model = PartialMonotonicityModel((2, 1, 0), (1, 0), ((1, 0), (1, 0)))
+    nodes = [(2, 0, (1, 1)), (1, 1, (0, 0)), (0, 1, (0, 0)), (1, 0, (0, 0))]
+    checked = model._check_independent_set(make_set(nodes))
+    assert type(checked) is list and set(checked) == set(nodes)
+    if make_set in (list, tuple, iter):
+        assert checked == nodes
+    assert model.format_inequality(make_set(nodes)) == (
+        "P(Y=1, D=0 | Z1=0, Z2=0) + P(Y=0, D=1 | Z1=0, Z2=0) + "
+        "P(Y=1, D=1 | Z1=0, Z2=0) + P(Y=2, D=0 | Z1=1, Z2=1) <= 1"
+    )
+
+
+def test_format_inequality_incomparable_instruments_follow_product_order():
+    """Exclusion separates the events even though the instrument vectors are incomparable."""
+    model = PartialMonotonicityModel(**TWO_BINARY)
+    assert model.format_inequality([(0, 0, (1, 0)), (1, 0, (0, 1))]) == (
+        "P(Y=1, D=0 | Z1=0, Z2=1) + P(Y=0, D=0 | Z1=1, Z2=0) <= 1"
+    )
+
+
+@pytest.mark.parametrize("independent_set, expected", [
+    (
+        [(0, 0, (0, 0)), (1, 0, (0, 0))],
+        "P(Y=0, D=0 | Z1=0, Z2=0) + P(Y=1, D=0 | Z1=0, Z2=0) <= 1",
+    ),
+    (
+        [(0, 0, (0, 0)), (1, 0, (0, 0)), (2, 0, (0, 0))],
+        "P(D=0 | Z1=0, Z2=0) <= 1",
+    ),
+])
+def test_format_inequality_three_outcomes_merge_only_when_complete(independent_set, expected):
+    model = PartialMonotonicityModel((0, 1, 2), (0, 1), ((0, 1), (0, 1)))
+    assert model.format_inequality(independent_set) == expected
+
+
+@pytest.mark.parametrize("method", [
+    "_check_independent_set", "format_inequality", "format_inequalities",
+])
+@pytest.mark.parametrize("bad, exc, match", [
+    ("abc", TypeError, "string"),
+    (b"abc", TypeError, "string"),
+    (bytearray(b"abc"), TypeError, "string"),
+    (3, TypeError, "iterable"),
+    ([[0, 0, (0, 0)]], TypeError, "hashable"),
+    ([(0, 0, [0, 0])], TypeError, "hashable"),
+    ([], ValueError, "at least one node"),
+    ([(2, 0, (0, 0))], ValueError, "not a node"),
+    ([(0, 0, (0, 0)), (0, 0, (0, 0))], ValueError, "duplicate"),
+    ([(0, 0, (0, 0)), (0, 1, (1, 1))], ValueError, "adjacent"),
+])
+def test_inequality_validation(method, bad, exc, match):
+    """The validator and both formatters reject invalid sets under partial monotonicity."""
+    model = PartialMonotonicityModel(**TWO_BINARY, exclusion=False)
+    argument = [bad] if method == "format_inequalities" else bad
+    with pytest.raises(exc, match=match):
+        getattr(model, method)(argument)
+
+
+@pytest.mark.parametrize("make_sets", [list, tuple, iter])
+def test_format_inequalities_preserves_input_order(make_sets):
+    model = PartialMonotonicityModel(**TWO_BINARY, exclusion=False)
+    independent_sets = [
+        [(0, 0, (1, 0)), (0, 1, (0, 0)), (1, 0, (1, 0)), (1, 1, (0, 0))],
+        [(0, 0, (0, 1)), (0, 1, (0, 0)), (1, 0, (0, 1)), (1, 1, (0, 0))],
+        [(0, 0, (1, 0)), (0, 1, (0, 0)), (1, 0, (1, 0)), (1, 1, (0, 0))],
+    ]
+    texts = model.format_inequalities(make_sets(independent_sets))
+    assert type(texts) is list
+    assert all(type(text) is str and text.endswith(" <= 1") for text in texts)
+    assert texts == [
+        "P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=0) <= 1",
+        "P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=0, Z2=1) <= 1",
+        "P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=0) <= 1",
+    ]
+
+
+def test_format_inequalities_empty():
+    texts = PartialMonotonicityModel(**TWO_BINARY).format_inequalities([])
+    assert type(texts) is list and texts == []
+
+
+@pytest.mark.parametrize("bad", ["abc", b"abc", bytearray(b"abc"), 3])
+def test_format_inequalities_rejects_invalid_outer_input(bad):
+    with pytest.raises(TypeError):
+        PartialMonotonicityModel(**TWO_BINARY).format_inequalities(bad)
+
+
+def test_format_inequalities_rejects_a_single_independent_set():
+    model = PartialMonotonicityModel(**TWO_BINARY, exclusion=False)
+    with pytest.raises(TypeError, match="format_inequality"):
+        model.format_inequalities([
+            (0, 0, (1, 0)), (0, 1, (0, 0)), (1, 0, (1, 0)), (1, 1, (0, 0)),
+        ])
+
+
+@pytest.mark.parametrize("exclusion, count", [(False, 5), (True, 45)])
+def test_format_inequalities_all_binary_multigroup_mis(exclusion, count):
+    """Each complete binary outcome pair removes one term; without exclusion all merge."""
+    model = PartialMonotonicityModel(**TWO_BINARY, exclusion=exclusion)
+    G = model.build_graph()
+    mis_list = [
+        sorted(c) for c in nx.find_cliques(nx.complement(G))
+        if len({model.group_fn(n) for n in c}) > 1
+    ]
+    texts = model.format_inequalities(mis_list)
+    assert type(texts) is list and len(texts) == len(mis_list) == count
+    for independent_set, text in zip(mis_list, texts):
+        assert type(text) is str and text.endswith(" <= 1")
+        merges = sum(
+            (0, d, z) in independent_set and (1, d, z) in independent_set
+            for d, z in product((0, 1), ((0, 0), (0, 1), (1, 0), (1, 1)))
+        )
+        assert text.count("P(") == len(independent_set) - merges
+        if not exclusion:
+            assert len(independent_set) == 4 and merges == 2
+            assert text.count("P(") == 2 and "Y=" not in text
+
+
+@pytest.mark.parametrize("exclusion, count", [(False, 1), (True, 5)])
+def test_one_instrument_inequalities_match_ivmodel(exclusion, count):
+    """Dropping the instrument tuple gives the scalar IV graph and the same inequalities."""
+    model = PartialMonotonicityModel((0, 1), (0, 1), ((0, 1),), exclusion=exclusion)
+    scalar = IVModel((0, 1), (0, 1), (0, 1), exclusion=exclusion, d_monotonicity=True)
+    G = model.build_graph()
+    relabel = lambda node: (node[0], node[1], node[2][0])
+    relabelled = nx.relabel_nodes(G, relabel)
+    scalar_graph = scalar.build_graph()
+    assert set(relabelled.nodes()) == set(scalar_graph.nodes())
+    assert edge_set(relabelled) == edge_set(scalar_graph)
+    mis_list = [
+        sorted(c) for c in nx.find_cliques(nx.complement(G))
+        if len({model.group_fn(n) for n in c}) > 1
+    ]
+    assert len(mis_list) == count
+    for independent_set in mis_list:
+        assert model.format_inequality(independent_set) == scalar.format_inequality(
+            [relabel(node) for node in independent_set]
+        ).replace("Z=", "Z1=")
+
+
+def test_inequality_nodes_are_matched_by_value_and_written_with_support_values():
+    """Aliases of a support value (float, NumPy scalar, bool) select the model's node."""
+    model = PartialMonotonicityModel(**TWO_BINARY)
+    aliased = [(np.int64(0), 0.0, (True, 0)), (1, 0, (0, 1))]
+    checked = model._check_independent_set(aliased)
+    assert checked == [(0, 0, (1, 0)), (1, 0, (0, 1))]
+    assert all(type(value) is int for y, d, z in checked for value in (y, d, *z))
+    assert model.format_inequality(aliased) == (
+        "P(Y=1, D=0 | Z1=0, Z2=1) + P(Y=0, D=0 | Z1=1, Z2=0) <= 1"
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        model.format_inequality([(0, 0, (1, 0)), (0.0, 0, (True, 0))])
+
+
+@pytest.mark.parametrize("bad", [42, "node", 1.5, None])
+def test_inequality_non_tuple_nodes_are_type_errors(bad):
+    with pytest.raises(TypeError, match="tuples"):
+        PartialMonotonicityModel(**TWO_BINARY).format_inequality([bad])
+
+
+@pytest.mark.parametrize("sets, match", [
+    ([(9, 0, (0, 0))], "format_inequality"),  # a node-like tuple, not a collection of nodes
+    ([([0, 0, (0, 0)],)], "hashable"),  # a set whose only node is a list
+])
+def test_format_inequalities_detects_node_like_tuples_and_unhashable_nodes(sets, match):
+    with pytest.raises(TypeError, match=match):
+        PartialMonotonicityModel(**TWO_BINARY).format_inequalities(sets)

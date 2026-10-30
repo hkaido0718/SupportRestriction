@@ -69,9 +69,13 @@ numerically by ``GraphAnalyzer``.
 
 ``build_graph`` returns a ``networkx.Graph``. Maximal independent sets, plots, and the
 regularity checks are the job of ``GraphAnalyzer`` in ``graph_analysis_utils.py``,
-which this module deliberately does not import.
+which this module deliberately does not import. ``format_inequalities`` writes the
+maximal independent sets found by the analyzer as the inequalities in conditional
+probabilities that they imply, since the model knows which variable values each node
+carries.
 """
 
+import numbers
 from itertools import combinations, product
 
 import networkx as nx
@@ -281,6 +285,146 @@ class PartialMonotonicityModel:
             G.add_edge(u, v)
 
         return G
+
+    # ------------------------------------------------------------------ inequalities
+    def _check_independent_set(self, independent_set):
+        """Return the nodes of ``independent_set`` as a list of this model's own node
+        tuples, in the order given, after checking that they form an independent set
+        of the potential response graph.
+
+        Each element must be a tuple equal to a node in ``self.nodes``. Values are
+        matched by numeric equality, so ``1.0``, ``numpy.int64(1)`` or ``True`` select
+        the node whose value is ``1``, and the returned tuple carries the support value,
+        which is what the inequality prints. Raises TypeError for a string, a
+        non-iterable, an element that is not a tuple, or a tuple with an unhashable
+        entry, and ValueError for an empty set, a tuple that is not a node of this
+        model, a duplicate node, or two nodes with different instrument
+        vectors that ``violate_pairwise_fn`` does not reject: such a pair is an edge of
+        the graph, so some admissible potential-response vector generates both events
+        and the sum of their probabilities is not bounded by one.
+        """
+        if isinstance(independent_set, (str, bytes, bytearray)):
+            raise TypeError(
+                f"an independent set must be an iterable of nodes (y, d, z), not a "
+                f"string: {independent_set!r}"
+            )
+        try:
+            nodes = list(independent_set)
+        except TypeError:
+            raise TypeError(
+                f"an independent set must be an iterable of nodes (y, d, z), got "
+                f"{independent_set!r} of type {type(independent_set).__name__}"
+            ) from None
+        if not nodes:
+            raise ValueError("an independent set must contain at least one node")
+        known = {node: node for node in self.nodes}
+        canonical = []
+        for node in nodes:
+            if not isinstance(node, tuple):
+                raise TypeError(
+                    f"nodes must be hashable tuples (y, d, z), got {node!r} of type "
+                    f"{type(node).__name__}"
+                )
+            try:
+                canonical.append(known[node])
+            except TypeError:
+                raise TypeError(
+                    f"nodes must be hashable tuples (y, d, z), got {node!r} with an "
+                    f"unhashable entry"
+                ) from None
+            except KeyError:
+                raise ValueError(
+                    f"{node!r} is not a node (y, d, z) of this model"
+                ) from None
+        nodes = canonical
+        if len(set(nodes)) != len(nodes):
+            raise ValueError(
+                f"an independent set must not contain duplicate nodes: {nodes!r}"
+            )
+        for u, v in combinations(nodes, 2):
+            if self.group_fn(u) != self.group_fn(v) and not self.violate_pairwise_fn(u, v):
+                raise ValueError(
+                    f"{u!r} and {v!r} are adjacent in the potential response graph, so "
+                    f"the set is not independent and its events are not mutually "
+                    f"exclusive"
+                )
+        return nodes
+
+    def _label_instrument(self, z):
+        """The instrument vector ``z`` written coordinate by coordinate, ``"Z1=0, Z2=1"``,
+        for the conditioning event of a probability."""
+        return ", ".join(f"Z{j + 1}={z[j]}" for j in range(self.n_instruments))
+
+    def format_inequality(self, independent_set):
+        """Write one independent set of the potential response graph as the inequality
+        it implies, for example
+        ``"P(D=1 | Z1=0, Z2=0) + P(D=0 | Z1=1, Z2=1) <= 1"``.
+
+        The events of an independent set are mutually exclusive under the model, so
+        their conditional probabilities sum to at most one (Theorem 1 of Kaido and
+        Ponomarev, 2025). Each node (y, d, z) contributes
+        ``P(Y=y, D=d | Z1=z[0], ..., Zm=z[m-1])``, the instrument vector written
+        coordinate by coordinate. When the set contains every outcome value for a
+        treatment value d at an instrument vector z, those terms are written as
+        ``P(D=d | Z1=z[0], ..., Zm=z[m-1])``. Terms are ordered by instrument vector
+        (product order), then treatment value, then outcome value, each in support
+        order. The set is validated by ``_check_independent_set``; a set that lies
+        within a single instrument vector is accepted, but its inequality holds
+        trivially.
+        """
+        nodes = self._check_independent_set(independent_set)
+        outcomes = {}
+        for y, d, z in nodes:
+            outcomes.setdefault(z, {}).setdefault(d, set()).add(y)
+        all_outcomes = set(self.y_support)
+        terms = []
+        for z in self.z_support:
+            given = self._label_instrument(z)
+            for d in self.d_support:
+                ys = outcomes.get(z, {}).get(d)
+                if ys is None:
+                    continue
+                if ys == all_outcomes:
+                    terms.append(f"P(D={d} | {given})")
+                else:
+                    terms.extend(f"P(Y={y}, D={d} | {given})" for y in sorted(ys))
+        return " + ".join(terms) + " <= 1"
+
+    def format_inequalities(self, independent_sets):
+        """Write each independent set in ``independent_sets`` as an inequality and
+        return the strings as a list, in the order given.
+
+        Meant for the maximal independent sets returned by
+        ``GraphAnalyzer.find_mis_excluding_single_group()`` on the graph of this
+        model, so that the testable implications of the model are listed as
+
+            inequalities = model.format_inequalities(analyzer.find_mis_excluding_single_group())
+
+        Each set is validated and formatted by ``format_inequality``. Passing a single
+        independent set instead of a sequence of them raises TypeError: its first
+        element is then a node, a tuple that starts with a number, rather than a
+        collection of nodes.
+        """
+        if isinstance(independent_sets, (str, bytes, bytearray)):
+            raise TypeError(
+                f"independent_sets must be an iterable of independent sets, not a "
+                f"string: {independent_sets!r}"
+            )
+        try:
+            sets = list(independent_sets)
+        except TypeError:
+            raise TypeError(
+                f"independent_sets must be an iterable of independent sets, got "
+                f"{independent_sets!r} of type {type(independent_sets).__name__}"
+            ) from None
+        first = sets[0] if sets else None
+        if isinstance(first, tuple) and first and isinstance(first[0], numbers.Real):
+            raise TypeError(
+                f"format_inequalities expects an iterable of independent sets but "
+                f"received node-like tuples such as {first!r}; to format one "
+                f"independent set call format_inequality"
+            )
+        return [self.format_inequality(independent_set) for independent_set in sets]
 
     # ------------------------------------------------------------------ description
     def summary(self):
