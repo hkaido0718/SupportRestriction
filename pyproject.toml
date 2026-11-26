@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61", "pybind11>=2.10"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SupportRestriction"
+version = "0.1.0"
+description = "Graph tools for the sharp testable implications of potential outcome models (Kaido and Ponomarev, 2025)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "networkx",
+    "pandas",
+    "matplotlib",
+]
