@@ -55,8 +55,44 @@ class GraphAnalyzer:
         df.to_csv(filename, index=False)
         return df
 
-    def is_perfect(self):
-        """Check whether G is perfect by testing for odd holes and antiholes."""
+    def find_imperfectness_witness(self, backend="cpp"):
+        """Return ``(kind, witness)`` showing why G is not perfect, if it is not.
+
+        - ``("odd_hole", labels)``: ``labels`` is an induced odd cycle of G of
+          length at least five, in cyclic order.
+        - ``("odd_antihole", labels)``: ``labels`` is an odd hole of the
+          complement of G, ordered as a cycle in the complement (consecutive
+          nodes are NOT adjacent in G).
+        - ``(None, [])``: both searches finished without a witness, so G is perfect.
+
+        The nodes are the original labels of G, edge weights are ignored, and the
+        witness is verified in pure Python before it is returned (see
+        ``odd_hole.py``). Only ``backend="cpp"`` is supported: it needs the
+        optional C++ extension and raises ``ImportError`` when that is not
+        installed. An error is never reported as ``(None, [])``.
+        """
+        if backend != "cpp":
+            raise ValueError("Witness retrieval currently supports backend='cpp' only")
+        from odd_hole import find_odd_hole_or_antihole
+
+        return find_odd_hole_or_antihole(
+            self.G, nodes=list(self.G.nodes()), verify=True
+        )
+
+    def is_perfect(self, backend="python"):
+        """Check whether G is perfect by testing for odd holes and antiholes.
+
+        ``backend="python"`` (default) enumerates odd-sized node subsets and needs
+        no compiled code. ``backend="cpp"`` runs the search of
+        ``find_imperfectness_witness`` once and returns whether it found no
+        witness; it needs the optional C++ extension.
+        """
+        if backend == "cpp":
+            kind, _ = self.find_imperfectness_witness(backend="cpp")
+            return kind is None
+        if backend != "python":
+            raise ValueError("backend must be 'python' or 'cpp'")
+
         def is_induced_cycle(H):
             n = H.number_of_nodes()
             m = H.number_of_edges()
